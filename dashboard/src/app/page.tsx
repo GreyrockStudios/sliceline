@@ -4,6 +4,12 @@ import { useState, useEffect } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
+const DEFAULT_STATS = {
+  orders_completed_24h: 0, orders_cancelled_24h: 0,
+  revenue_24h: 0, avg_order_value: 0,
+  active_orders: 0, active_calls: 0, avg_call_duration: 0,
+};
+
 type Location = {
   id: string;
   store_number: string;
@@ -103,8 +109,8 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-function formatCurrency(val: number): string {
-  return "$" + val.toFixed(2);
+function formatCurrency(val: number | string): string {
+  return "$" + Number(val).toFixed(2);
 }
 
 function formatDuration(seconds: number | null): string {
@@ -130,11 +136,8 @@ export default function Dashboard() {
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
   const [recentCalls, setRecentCalls] = useState<Call[]>([]);
   const [stockAlerts, setStockAlerts] = useState<StockAlert[]>([]);
-  const [stats, setStats] = useState({
-    orders_completed_24h: 0, orders_cancelled_24h: 0,
-    revenue_24h: 0, avg_order_value: 0,
-    active_orders: 0, active_calls: 0, avg_call_duration: 0,
-  });
+  const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState(DEFAULT_STATS);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
   const [selectedCall, setSelectedCall] = useState<string | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<CallSegment[]>([]);
@@ -142,19 +145,19 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetch(`${API_URL}/api/locations?is_active=true`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(`Locations: ${r.status}`); return r.json(); })
       .then((data) => {
         const locs = Array.isArray(data) ? data : data.locations || [];
         setLocations(locs);
         if (locs.length > 0 && !selectedLocation) setSelectedLocation(locs[0].id);
       })
-      .catch(console.error);
+      .catch((e) => { console.error(e); setError("Could not load locations. Check your connection."); });
   }, []);
 
   const loadDashboard = () => {
     if (!selectedLocation) return;
     fetch(`${API_URL}/api/dashboard/${selectedLocation}`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(`Dashboard: ${r.status}`); return r.json(); })
       .then((data) => {
         setActiveOrders(data.active_orders || []);
         setRecentOrders(data.recent_orders || []);
@@ -170,7 +173,7 @@ export default function Dashboard() {
           avg_call_duration: data.stats?.avg_call_duration || 0,
         });
       })
-      .catch(console.error);
+      .catch((e) => { console.error(e); });
   };
 
   useEffect(() => { loadDashboard(); }, [selectedLocation]);
@@ -188,7 +191,7 @@ export default function Dashboard() {
     setSelectedCall(callId);
     setTranscriptLoading(true);
     fetch(`${API_URL}/api/calls/${callId}`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(`Call: ${r.status}`); return r.json(); })
       .then((data) => {
         setTranscriptSegments(data.segments || []);
       })
@@ -197,6 +200,21 @@ export default function Dashboard() {
   };
 
   const selectedLoc = locations.find((l) => l.id === selectedLocation);
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 max-w-sm text-center">
+          <div className="w-10 h-10 mx-auto mb-3 rounded-full bg-red-50 flex items-center justify-center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-500"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </div>
+          <p className="text-sm font-medium text-slate-700 mb-1">Connection Error</p>
+          <p className="text-xs text-slate-500 mb-4">{error}</p>
+          <button onClick={() => { setError(null); loadDashboard(); }} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors">Retry</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -247,7 +265,7 @@ export default function Dashboard() {
           <StatCard icon={<IconDollar />} label="Revenue" value={formatCurrency(stats.revenue_24h)} color="amber" />
           <StatCard icon={<IconChart />} label="Avg Order" value={formatCurrency(stats.avg_order_value)} color="violet" />
           <StatCard icon={<IconPhone />} label="Calls" value={recentCalls.length} color="cyan" />
-          <StatCard icon={<IconClockStat />} label="Avg Call" value={stats.avg_call_duration ? `${Math.floor(stats.avg_call_duration / 60)}m` : "—"} color="rose" />
+          <StatCard icon={<IconClockStat />} label="Avg Call" value={stats.avg_call_duration ? `${Math.floor(Number(stats.avg_call_duration) / 60)}m` : "—"} color="rose" />
         </div>
 
         {/* Active Orders + Stock Alerts */}
