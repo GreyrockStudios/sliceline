@@ -1,174 +1,25 @@
 const { v4: uuidv4 } = require('uuid');
+const { getLocationMenu } = require('./menuHelpers');
 
 module.exports = async function (fastify, opts) {
-  // Helper: get menu for a location (with overrides applied)
-  async function getLocationMenu(locationId) {
-    // Get location's franchise
-    const locResult = await fastify.pg.query('SELECT franchise_id FROM locations WHERE id = $1', [locationId]);
-    if (!locResult.rows.length) return null;
-    const franchiseId = locResult.rows[0].franchise_id;
-
-    // Get all categories
-    const catsResult = await fastify.pg.query(
-      'SELECT * FROM menu_categories WHERE franchise_id = $1 AND is_active = true ORDER BY display_order',
-      [franchiseId]
-    );
-
-    // Get all menu items for franchise (base items)
-    const itemsResult = await fastify.pg.query(
-      `SELECT mi.*, mc.name AS category_name
-       FROM menu_items mi
-       JOIN menu_categories mc ON mc.id = mi.category_id
-       WHERE mi.franchise_id = $1 AND mi.is_available = true
-       ORDER BY mi.display_order`,
-      [franchiseId]
-    );
-
-    // Get location overrides
-    const overridesResult = await fastify.pg.query(
-      'SELECT * FROM location_menu_overrides WHERE location_id = $1', [locationId]
-    );
-    const overrides = new Map(overridesResult.rows.map(o => [o.menu_item_id, o]));
-
-    // Get stock status
-    const stockResult = await fastify.pg.query(
-      `SELECT * FROM location_stock WHERE location_id = $1 AND item_type = 'menu_item' AND stock_status != 'in_stock'`,
-      [locationId]
-    );
-    const stock = new Map(stockResult.rows.map(s => [s.item_id, s]));
-
-    // Get toppings for franchise
-    const toppingsResult = await fastify.pg.query(
-      'SELECT * FROM toppings WHERE franchise_id = $1 AND is_available = true ORDER BY is_premium, name',
-      [franchiseId]
-    );
-
-    // Get topping overrides for location
-    const topOverridesResult = await fastify.pg.query(
-      'SELECT * FROM location_topping_overrides WHERE location_id = $1', [locationId]
-    );
-    const topOverrides = new Map(topOverridesResult.rows.map(o => [o.topping_id, o]));
-
-    // Get topping stock
-    const topStockResult = await fastify.pg.query(
-      `SELECT * FROM location_stock WHERE location_id = $1 AND item_type = 'topping' AND stock_status != 'in_stock'`,
-      [locationId]
-    );
-    const topStock = new Map(topStockResult.rows.map(s => [s.item_id, s]));
-
-    // Build menu with overrides applied
-    const items = itemsResult.rows.map(item => {
-      const override = overrides.get(item.id);
-      const stockInfo = stock.get(item.id);
-
-      // Skip discontinued items entirely
-      if (stockInfo && stockInfo.stock_status === 'discontinued') return null;
-      // Mark out of stock
-      if (stockInfo && stockInfo.stock_status === 'out_of_stock') {
-        return { ...item, is_available: false, stock_status: stockInfo.stock_status, stock_notes: stockInfo.notes, expected_restock: stockInfo.expected_restock_at };
-      }
-      // Mark low stock
-      if (stockInfo && stockInfo.stock_status === 'low_stock') {
-        return { ...item, stock_status: 'low_stock', stock_quantity: stockInfo.quantity, stock_notes: stockInfo.notes };
-      }
-
-      // Apply price override
-      if (override) {
-        return {
-          ...item,
-          base_price: override.price_override || item.base_price,
-          sizes: override.sizes_override || item.sizes,
-          is_available: override.is_available !== false,
-        };
-      }
-
-      return item;
-    }).filter(Boolean);
-
-    // Build toppings with overrides applied
-    const toppings = toppingsResult.rows.map(topping => {
-      const override = topOverrides.get(topping.id);
-      const stockInfo = topStock.get(topping.id);
-
-      if (stockInfo && stockInfo.stock_status === 'discontinued') return null;
-      if (stockInfo && stockInfo.stock_status === 'out_of_stock') {
-        return { ...topping, is_available: false, stock_status: stockInfo.stock_status, stock_notes: stockInfo.notes };
-      }
-
-      if (override) {
-        return {
-          ...topping,
-          base_price: override.price_override || topping.base_price,
-          is_available: override.is_available !== false,
-        };
-      }
-      return topping;
-    }).filter(Boolean);
-
-    // Get specials for this location (franchise-wide + location-specific)
-    const specialsResult = await fastify.pg.query(
-      `SELECT s.* FROM specials s
-       WHERE s.franchise_id = $1 AND s.is_active = true
-       AND (s.start_date IS NULL OR s.start_date <= CURRENT_DATE)
-       AND (s.end_date IS NULL OR s.end_date >= CURRENT_date)`,
-      [franchiseId]
-    );
-
-    // Exclude any specials this location has opted out of
-    const exclusionsResult = await fastify.pg.query(
-      'SELECT special_id FROM location_specials WHERE location_id = $1 AND is_excluded = true',
-      [locationId]
-    );
-    const excludedIds = new Set(exclusionsResult.rows.map(e => e.special_id));
-
-    const franchiseSpecials = specialsResult.rows.filter(s => !excludedIds.has(s.id));
-
-    // Get location-exclusive specials
-    const locationSpecialsResult = await fastify.pg.query(
-      `SELECT id, name, description, discount_type, discount_value, applies_to, applies_to_id,
-              day_of_week, start_time, end_time, start_date, end_date
-       FROM location_specials
-       WHERE location_id = $1 AND is_active = true AND special_id IS NULL
-       AND (start_date IS NULL OR start_date <= CURRENT_DATE)
-       AND (end_date IS NULL OR end_date >= CURRENT_DATE)`,
-      [locationId]
-    );
-
-    // Group items by category
-    const menu = catsResult.rows.map(cat => ({
-      ...cat,
-      items: items.filter(i => i.category_id === cat.id)
-    }));
-
-    return {
-      location_id: locationId,
-      categories: menu,
-      toppings,
-      specials: [...franchiseSpecials, ...locationSpecialsResult.rows],
-    };
-  }
-
-  // GET /api/menu/:locationId — Get full menu for a location (with overrides and stock)
+  // GET /api/menu/:locationId — Get full menu for a location (with overrides, stock, topping deps)
   fastify.get('/:locationId', async (request, reply) => {
-    const menu = await getLocationMenu(request.params.locationId);
+    const menu = await getLocationMenu(fastify, request.params.locationId);
     if (!menu) return reply.code(404).send({ error: 'Location not found' });
     return menu;
   });
 
   // GET /api/menu/:locationId/specials — Get current specials for a location
   fastify.get('/:locationId/specials', async (request, reply) => {
-    const menu = await getLocationMenu(request.params.locationId);
+    const menu = await getLocationMenu(fastify, request.params.locationId);
     if (!menu) return reply.code(404).send({ error: 'Location not found' });
 
-    // Filter to only currently active specials (day + time)
     const now = new Date();
-    const dayOfWeek = now.getDay(); // 0=Sun
-    const currentTime = now.toTimeString().slice(0, 5); // HH:MM
+    const dayOfWeek = now.getDay();
+    const currentTime = now.toTimeString().slice(0, 5);
 
     const activeSpecials = menu.specials.filter(s => {
-      // Check day
       if (s.day_of_week && s.day_of_week.length && !s.day_of_week.includes(dayOfWeek)) return false;
-      // Check time range
       if (s.start_time && s.end_time) {
         if (currentTime < s.start_time || currentTime > s.end_time) return false;
       }
@@ -225,7 +76,7 @@ module.exports = async function (fastify, opts) {
 
   // POST /api/menu/:locationId/stock — Update stock for a location
   fastify.post('/:locationId/stock', async (request, reply) => {
-    const { items } = request.body; // [{item_type, item_id, stock_status, quantity?, notes?}]
+    const { items } = request.body;
     const locationId = request.params.locationId;
 
     const results = [];
@@ -242,5 +93,58 @@ module.exports = async function (fastify, opts) {
     }
 
     return { updated: results };
+  });
+
+  // GET /api/menu/:locationId/topping-impact — Which pizzas are affected by a topping being out of stock?
+  fastify.get('/:locationId/topping-impact', async (request, reply) => {
+    const locationId = request.params.locationId;
+    
+    // Get all out-of-stock toppings at this location
+    const { rows: oosToppings } = await fastify.pg.query(
+      `SELECT ls.*, t.name AS topping_name
+       FROM location_stock ls
+       JOIN toppings t ON t.id = ls.item_id
+       WHERE ls.location_id = $1 AND ls.item_type = 'topping' AND ls.stock_status = 'out_of_stock'`,
+      [locationId]
+    );
+
+    if (!oosToppings.length) {
+      return { out_of_stock_toppings: [], affected_pizzas: [] };
+    }
+
+    const oosIds = oosToppings.map(t => t.item_id);
+
+    // Find pizzas that require any of these toppings
+    const { rows: affectedPizzas } = await fastify.pg.query(
+      `SELECT mi.id, mi.name, mi.slug, mit.topping_id, t.name AS topping_name, mit.is_required
+       FROM menu_item_toppings mit
+       JOIN menu_items mi ON mi.id = mit.menu_item_id
+       JOIN toppings t ON t.id = mit.topping_id
+       WHERE mit.topping_id = ANY($1)
+       ORDER BY mi.name`,
+      [oosIds]
+    );
+
+    // Group by pizza
+    const pizzaMap = new Map();
+    for (const row of affectedPizzas) {
+      if (!pizzaMap.has(row.id)) {
+        pizzaMap.set(row.id, { id: row.id, name: row.name, slug: row.slug, unavailable_toppings: [] });
+      }
+      if (row.is_required) {
+        pizzaMap.get(row.id).unavailable_toppings.push(row.topping_name);
+      }
+    }
+
+    const result = [...pizzaMap.values()];
+    // Pizzas with any required topping out of stock are unavailable
+    const unavailable = result.filter(p => p.unavailable_toppings.length > 0);
+    const available_with_removal = result.filter(p => p.unavailable_toppings.length === 0);
+
+    return {
+      out_of_stock_toppings: oosToppings.map(t => ({ id: t.item_id, name: t.topping_name, notes: t.notes, expected_restock: t.expected_restock_at })),
+      unavailable_pizzas: unavailable,
+      available_with_topping_removed: available_with_removal,
+    };
   });
 };

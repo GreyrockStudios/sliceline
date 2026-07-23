@@ -114,6 +114,22 @@ CREATE TABLE location_topping_overrides (
   UNIQUE(location_id, topping_id)
 );
 
+-- Pizza toppings (which toppings come on each menu item by default)
+-- This is the critical link: a pizza's availability depends on its default toppings being in stock
+-- When a topping is out of stock, any pizza that requires it becomes unavailable
+-- Customers can also add/remove toppings when ordering
+CREATE TABLE menu_item_toppings (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  menu_item_id UUID NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
+  topping_id UUID NOT NULL REFERENCES toppings(id) ON DELETE CASCADE,
+  is_required BOOLEAN DEFAULT true,  -- true = core ingredient (out of stock = pizza unavailable), false = default but removable
+  display_order INTEGER DEFAULT 0,
+  UNIQUE(menu_item_id, topping_id)
+);
+
+CREATE INDEX idx_menu_item_toppings_item ON menu_item_toppings(menu_item_id);
+CREATE INDEX idx_menu_item_toppings_topping ON menu_item_toppings(topping_id);
+
 -- ============================================
 -- INVENTORY / STOCK TRACKING
 -- ============================================

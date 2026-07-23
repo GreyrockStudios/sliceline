@@ -141,6 +141,74 @@ INSERT INTO toppings (id, franchise_id, name, base_price, is_premium) VALUES
 ('20e5bbb3-e6a0-5e41-abd0-890145a8adac', 'a1b2c3d4-0000-0000-0000-000000000001', 'Fresh Basil', 1.75, false);
 
 -- ============================================
+-- PIZZA TOPPINGS (default recipes)
+-- is_required=true means a core ingredient — if out of stock, the pizza is unavailable
+-- is_required=false means default but optional — customer can remove it, pizza still available without it
+-- ============================================
+
+-- The Classic: Pepperoni, mozzarella, tomato sauce
+-- (mozzarella & tomato sauce are implicit — not tracked as toppings)
+INSERT INTO menu_item_toppings (menu_item_id, topping_id, is_required, display_order) VALUES
+('ea0c7b16-5d8c-5247-89de-3e2aa428b653', '6b93c756-08a3-5e8f-a429-c76d39b300e1', true, 1),  -- Pepperoni (required)
+('ea0c7b16-5d8c-5247-89de-3e2aa428b653', '5fa76479-0263-5cf5-a87c-86380d7b10d8', false, 2);  -- Extra Cheese (optional default)
+
+-- The Works: Pepperoni, mushrooms, green peppers, onions, sausage, olives
+INSERT INTO menu_item_toppings (menu_item_id, topping_id, is_required, display_order) VALUES
+('f4f9e87d-bc5c-57fe-bf50-b8c7b04274dc', '6b93c756-08a3-5e8f-a429-c76d39b300e1', true, 1),  -- Pepperoni
+('f4f9e87d-bc5c-57fe-bf50-b8c7b04274dc', '955b157f-a977-5ddd-b2df-34f2fc3284ba', true, 2),  -- Mushrooms
+('f4f9e87d-bc5c-57fe-bf50-b8c7b04274dc', '7e80f4a2-2791-580b-af91-6b24a2739379', true, 3),  -- Green Peppers
+('f4f9e87d-bc5c-57fe-bf50-b8c7b04274dc', '0771aa6f-6095-5d5b-9947-f63445728e31', false, 4),  -- Onions
+('f4f9e87d-bc5c-57fe-bf50-b8c7b04274dc', '20adf705-96b7-51b2-8e43-4f1d2fc3730b', true, 5),  -- Sausage
+('f4f9e87d-bc5c-57fe-bf50-b8c7b04274dc', '5e1c7364-f5f0-5ab4-96b7-76197b5d7f8d', false, 6);  -- Black Olives
+
+-- Meat Lovers: Pepperoni, ham, bacon, sausage, ground beef
+INSERT INTO menu_item_toppings (menu_item_id, topping_id, is_required, display_order) VALUES
+('ead1f569-1a16-5925-9263-f73bb2140efc', '6b93c756-08a3-5e8f-a429-c76d39b300e1', true, 1),  -- Pepperoni
+('ead1f569-1a16-5925-9263-f73bb2140efc', 'ac36f50d-4012-59c0-8493-d78f5b63edf2', true, 2),  -- Ham
+('ead1f569-1a16-5925-9263-f73bb2140efc', '0eced9bc-a0e5-5335-9671-193c07c31d70', true, 3),  -- Bacon
+('ead1f569-1a16-5925-9263-f73bb2140efc', '20adf705-96b7-51b2-8e43-4f1d2fc3730b', true, 4),  -- Sausage
+('ead1f569-1a16-5925-9263-f73bb2140efc', '7b258564-4d3c-5884-ae16-c790ae8f7b04', true, 5);  -- Ground Beef
+
+-- Veggie Supreme: mushrooms, green peppers, onions, olives, tomatoes, spinach
+INSERT INTO menu_item_toppings (menu_item_id, topping_id, is_required, display_order) VALUES
+('3b68a041-ae3e-5476-bd57-f84d206921dc', '955b157f-a977-5ddd-b2df-34f2fc3284ba', true, 1),  -- Mushrooms
+('3b68a041-ae3e-5476-bd57-f84d206921dc', '7e80f4a2-2791-580b-af91-6b24a2739379', true, 2),  -- Green Peppers
+('3b68a041-ae3e-5476-bd57-f84d206921dc', '0771aa6f-6095-5d5b-9947-f63445728e31', false, 3),  -- Onions
+('3b68a041-ae3e-5476-bd57-f84d206921dc', '5e1c7364-f5f0-5ab4-96b7-76197b5d7f8d', true, 4),  -- Black Olives
+('3b68a041-ae3e-5476-bd57-f84d206921dc', '704be33e-1d3a-5027-a98f-dabfeb8e6baa', true, 5),  -- Tomatoes
+('3b68a041-ae3e-5476-bd57-f84d206921dc', '727e329e-1150-5ffa-8e42-30e36dffbc77', false, 6);  -- Spinach
+
+-- Hawaiian: ham, pineapple
+INSERT INTO menu_item_toppings (menu_item_id, topping_id, is_required, display_order) VALUES
+('957264f2-13a5-53b7-ac57-59f142523421', 'ac36f50d-4012-59c0-8493-d78f5b63edf2', true, 1),  -- Ham
+('957264f2-13a5-53b7-ac57-59f142523421', 'c8c8acd8-b64e-5201-a48d-0d119df77693', true, 2);  -- Pineapple
+
+-- BBQ Chicken: grilled chicken, red onions, cilantro
+-- (BBQ sauce is in sizes JSON, not a topping)
+INSERT INTO menu_item_toppings (menu_item_id, topping_id, is_required, display_order) VALUES
+('65acf4da-3c9c-55dc-9086-262b7ba66f81', '4644f799-bf3f-5e79-bcc1-c487feda7cdf', true, 1),  -- Grilled Chicken
+('65acf4da-3c9c-55dc-9086-262b7ba66f81', '0771aa6f-6095-5d5b-9947-f63445728e31', false, 2);  -- Onions
+
+-- Buffalo Chicken: fried chicken, buffalo sauce, ranch
+-- (buffalo sauce & ranch drizzle are in sizes JSON)
+INSERT INTO menu_item_toppings (menu_item_id, topping_id, is_required, display_order) VALUES
+('a7a12a0e-7890-511c-b18f-ca061744ceab', '4644f799-bf3f-5e79-bcc1-c487feda7cdf', true, 1);  -- Grilled Chicken
+
+-- Margherita: fresh mozzarella, basil, EVOO
+-- (fresh mozzarella & EVOO are implicit, not tracked)
+INSERT INTO menu_item_toppings (menu_item_id, topping_id, is_required, display_order) VALUES
+('a2af7a60-9bf2-5405-8500-08dccf86e273', '20e5bbb3-e6a0-5e41-abd0-890145a8adac', true, 1);  -- Fresh Basil
+
+-- Diavola: spicy pepperoni, jalapeños
+-- (hot honey drizzle is in sizes JSON)
+INSERT INTO menu_item_toppings (menu_item_id, topping_id, is_required, display_order) VALUES
+('59aa2a7a-c695-5cbd-8abb-e468a063ceb5', '6b93c756-08a3-5e8f-a429-c76d39b300e1', true, 1),  -- Pepperoni
+('59aa2a7a-c695-5cbd-8abb-e468a063ceb5', '4ebba7d0-e4d7-58dd-86a0-3b9bead3fd86', true, 2);  -- Jalapeños
+
+-- Build Your Own: no default toppings (customer adds them)
+-- No menu_item_toppings rows for Build Your Own
+
+-- ============================================
 -- SPECIALS
 -- ============================================
 

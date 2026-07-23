@@ -1,4 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
+const { getLocationMenu } = require('./menuHelpers');
 
 // SliceLine Retell AI Integration
 // Handles: webhook events, tool calls (function calling), transcript storage
@@ -141,23 +142,29 @@ const RETELL_AGENT_PROMPT = `You are SliceLine, the friendly AI ordering assista
 ## Key Rules
 1. **Always confirm the order** — Read back every item, size, and topping before placing the order
 2. **Check stock availability** — If a customer asks for something, verify it's available at their location
-3. **Mention current specials** — If there's an active special, offer it proactively
-4. **Get the right location** — Determine which store they're ordering from early in the call
-5. **Never make up items or prices** — Use the tools to get accurate menu data
-6. **Payment is at pickup or delivery** — We don't take payment over the phone
-7. **Be concise** — Phone customers want quick service. Don't over-explain.
+3. **Understand topping dependencies** — Pizzas are defined by their toppings. If a topping is out of stock:
+   - Any pizza that REQUIRES that topping becomes unavailable (e.g. no pepperoni = no Classic, Works, Meat Lovers, or Diavola)
+   - Pizzas where the topping is optional can still be ordered WITHOUT that topping
+   - Always offer alternatives: "We're out of pepperoni, but I can make you a Veggie Supreme or Margherita"
+4. **Handle topping customizations** — Customers often add or remove toppings. Use the toppings list with prices to calculate adjustments.
+5. **Mention current specials** — If there's an active special, offer it proactively
+6. **Get the right location** — Determine which store they're ordering from early in the call
+7. **Never make up items or prices** — Use the tools to get accurate menu data
+8. **Payment is at pickup or delivery** — We don't take payment over the phone
+9. **Be concise** — Phone customers want quick service. Don't over-explain.
 
 ## Call Flow
 1. Greet the customer warmly
 2. Ask if they've ordered before (look up by phone if yes)
 3. Determine their location (nearest store)
 4. Take their order, checking for specials
-5. Read back the full order for confirmation
-6. Place the order and give them the order number and estimated time
-7. Thank them and say goodbye
+5. If any topping is out of stock, proactively explain which pizzas are affected and suggest alternatives
+6. Read back the full order for confirmation
+7. Place the order and give them the order number and estimated time
+8. Thank them and say goodbye
 
 ## Special Situations
-- **Out of stock**: Apologize and suggest alternatives. Never promise something that's unavailable.
+- **Out of stock topping**: Check which pizzas are affected. Offer alternatives. Example: "We're out of pepperoni tonight, so The Classic and Meat Lovers aren't available, but I can offer you a Margherita, Hawaiian, or Veggie Supreme instead."
 - **Dietary restrictions**: Offer gluten-free or vegetarian options from the menu.
 - **Large orders**: Suggest the Family Combo or Wing Night deal.
 - **Returning customers**: Welcome them back, reference their usual order if possible.
@@ -262,12 +269,8 @@ module.exports = async function (fastify, opts) {
 
       switch (tool_name) {
         case 'get_menu': {
-          const menuResult = await fastify.pg.query('SELECT id FROM locations WHERE id = $1', [parameters.location_id]);
-          if (!menuResult.rows.length) {
-            return { error: 'Location not found' };
-          }
-          // Use the menu route logic
           const menu = await getLocationMenu(fastify, parameters.location_id);
+          if (!menu) return { error: 'Location not found' };
           result = menu;
           break;
         }
@@ -350,43 +353,110 @@ module.exports = async function (fastify, opts) {
         case 'check_stock': {
           const { location_id, item_type, item_id, item_name } = parameters;
 
+          // If checking a topping, also report which pizzas it affects
+          if (item_type === 'topping' || item_name) {
+            let toppingId = item_id;
+            let toppingName = item_name;
+
+            // Resolve by name if needed
+            if (!toppingId && toppingName) {
+              const { rows: nameRows } = await fastify.pg.query(
+                `SELECT id, name FROM toppings WHERE franchise_id = (SELECT franchise_id FROM locations WHERE id = $1) AND name ILIKE $2`,
+                [location_id, `%${toppingName}%`]
+              );
+              if (nameRows.length) {
+                toppingId = nameRows[0].id;
+                toppingName = nameRows[0].name;
+              }
+            }
+
+            if (toppingId) {
+              // Check topping stock
+              const { rows: stockRows } = await fastify.pg.query(
+                `SELECT ls.*, t.name AS item_name FROM location_stock ls
+                 JOIN toppings t ON t.id = ls.item_id
+                 WHERE ls.location_id = $1 AND ls.item_type = 'topping' AND ls.item_id = $2`,
+                [location_id, toppingId]
+              );
+              const stockInfo = stockRows.length ? stockRows[0] : { stock_status: 'in_stock', item_name: toppingName };
+
+              // Find affected pizzas
+              const { rows: affectedPizzas } = await fastify.pg.query(
+                `SELECT mi.id, mi.name, mit.is_required
+                 FROM menu_item_toppings mit
+                 JOIN menu_items mi ON mi.id = mit.menu_item_id
+                 WHERE mit.topping_id = $1`,
+                [toppingId]
+              );
+
+              const requiredBy = affectedPizzas.filter(p => p.is_required).map(p => p.name);
+              const optionalOn = affectedPizzas.filter(p => !p.is_required).map(p => p.name);
+
+              return {
+                ...stockInfo,
+                topping_name: toppingName,
+                affected_pizzas: {
+                  unavailable_if_out_of_stock: requiredBy,
+                  available_with_topping_removed: optionalOn,
+                },
+                message: stockInfo.stock_status === 'out_of_stock'
+                  ? `${toppingName} is OUT OF STOCK. This means these pizzas are unavailable: ${requiredBy.join(', ')}. These pizzas can still be ordered without ${toppingName}: ${optionalOn.join(', ')}`
+                  : `${toppingName} is ${stockInfo.stock_status}`,
+              };
+            }
+          }
+
+          // General stock check (menu item or all out-of-stock)
           let query, params;
-          if (item_id) {
-            query = `SELECT ls.*, CASE WHEN ls.item_type = 'menu_item' THEN mi.name ELSE t.name END AS item_name
+          if (item_id && item_type === 'menu_item') {
+            query = `SELECT ls.*, mi.name AS item_name
                      FROM location_stock ls
-                     LEFT JOIN menu_items mi ON mi.id = ls.item_id AND ls.item_type = 'menu_item'
-                     LEFT JOIN toppings t ON t.id = ls.item_id AND ls.item_type = 'topping'
-                     WHERE ls.location_id = $1 AND ls.item_type = $2 AND ls.item_id = $3`;
-            params = [location_id, item_type, item_id];
-          } else if (item_name) {
-            // Fuzzy match by name
-            const nameField = item_type === 'menu_item' ? 'mi.name' : 't.name';
-            const table = item_type === 'menu_item' ? 'menu_items' : 'toppings';
-            query = `SELECT ls.*, ${nameField} AS item_name
+                     JOIN menu_items mi ON mi.id = ls.item_id
+                     WHERE ls.location_id = $1 AND ls.item_type = 'menu_item' AND ls.item_id = $2`;
+            params = [location_id, item_id];
+          } else if (item_name && item_type === 'menu_item') {
+            query = `SELECT ls.*, mi.name AS item_name
                      FROM location_stock ls
-                     JOIN ${table} t2 ON t2.id = ls.item_id
-                     LEFT JOIN menu_items mi ON mi.id = ls.item_id AND ls.item_type = 'menu_item'
-                     LEFT JOIN toppings t ON t.id = ls.item_id AND ls.item_type = 'topping'
-                     WHERE ls.location_id = $1 AND ls.item_type = $2 AND ${nameField} ILIKE $3`;
-            params = [location_id, item_type, `%${item_name}%`];
+                     JOIN menu_items mi ON mi.id = ls.item_id
+                     WHERE ls.location_id = $1 AND ls.item_type = 'menu_item' AND mi.name ILIKE $2`;
+            params = [location_id, `%${item_name}%`];
           } else {
-            // Return all out-of-stock items for the location
-            query = `SELECT ls.*, CASE WHEN ls.item_type = 'menu_item' THEN mi.name ELSE t.name END AS item_name
-                     FROM location_stock ls
-                     LEFT JOIN menu_items mi ON mi.id = ls.item_id AND ls.item_type = 'menu_item'
-                     LEFT JOIN toppings t ON t.id = ls.item_id AND ls.item_type = 'topping'
-                     WHERE ls.location_id = $1 AND ls.stock_status != 'in_stock'`;
-            params = [location_id];
+            // Return all out-of-stock items + topping cascade impact
+            const { rows: oosItems } = await fastify.pg.query(
+              `SELECT ls.*, CASE WHEN ls.item_type = 'menu_item' THEN mi.name ELSE t.name END AS item_name
+               FROM location_stock ls
+               LEFT JOIN menu_items mi ON mi.id = ls.item_id AND ls.item_type = 'menu_item'
+               LEFT JOIN toppings t ON t.id = ls.item_id AND ls.item_type = 'topping'
+               WHERE ls.location_id = $1 AND ls.stock_status != 'in_stock'`,
+              [location_id]
+            );
+
+            // Find pizzas affected by out-of-stock toppings
+            const oosToppingIds = oosItems.filter(i => i.item_type === 'topping' && i.stock_status === 'out_of_stock').map(i => i.item_id);
+            let toppingImpact = [];
+            if (oosToppingIds.length) {
+              const { rows } = await fastify.pg.query(
+                `SELECT mi.id, mi.name, mit.topping_id, t.name AS topping_name, mit.is_required
+                 FROM menu_item_toppings mit
+                 JOIN menu_items mi ON mi.id = mit.menu_item_id
+                 JOIN toppings t ON t.id = mit.topping_id
+                 WHERE mit.topping_id = ANY($1) AND mit.is_required = true`,
+                [oosToppingIds]
+              );
+              toppingImpact = rows;
+            }
+
+            return {
+              out_of_stock: oosItems,
+              topping_impact: toppingImpact.length ? toppingImpact : undefined,
+              message: toppingImpact.length
+                ? `Out-of-stock toppings make these pizzas unavailable: ${[...new Set(toppingImpact.map(i => i.name))].join(', ')}`
+                : undefined,
+            };
           }
 
           const { rows } = await fastify.pg.query(query, params);
-
-          if (item_id || item_name) {
-            // If no stock record found, item is in stock
-            result = rows.length ? rows[0] : { stock_status: 'in_stock', item_name: item_name || 'unknown' };
-          } else {
-            result = { out_of_stock: rows };
-          }
+          return rows.length ? rows[0] : { stock_status: 'in_stock', item_name: item_name || 'unknown' };
           break;
         }
 
@@ -455,82 +525,8 @@ module.exports = async function (fastify, opts) {
   });
 };
 
-// ============================================
-// HELPER: Get location menu (shared with menu route)
-// ============================================
-
-async function getLocationMenu(fastify, locationId) {
-  const locResult = await fastify.pg.query('SELECT franchise_id FROM locations WHERE id = $1', [locationId]);
-  if (!locResult.rows.length) return null;
-  const franchiseId = locResult.rows[0].franchise_id;
-
-  const catsResult = await fastify.pg.query(
-    'SELECT * FROM menu_categories WHERE franchise_id = $1 AND is_active = true ORDER BY display_order', [franchiseId]
-  );
-  const itemsResult = await fastify.pg.query(
-    `SELECT mi.* FROM menu_items mi
-     WHERE mi.franchise_id = $1 AND mi.is_available = true ORDER BY mi.display_order`, [franchiseId]
-  );
-  const overridesResult = await fastify.pg.query(
-    'SELECT * FROM location_menu_overrides WHERE location_id = $1', [locationId]
-  );
-  const overrides = new Map(overridesResult.rows.map(o => [o.menu_item_id, o]));
-  const stockResult = await fastify.pg.query(
-    `SELECT * FROM location_stock WHERE location_id = $1 AND item_type = 'menu_item' AND stock_status != 'in_stock'`, [locationId]
-  );
-  const stock = new Map(stockResult.rows.map(s => [s.item_id, s]));
-  const toppingsResult = await fastify.pg.query(
-    'SELECT * FROM toppings WHERE franchise_id = $1 AND is_available = true ORDER BY is_premium, name', [franchiseId]
-  );
-  const topOverridesResult = await fastify.pg.query(
-    'SELECT * FROM location_topping_overrides WHERE location_id = $1', [locationId]
-  );
-  const topOverrides = new Map(topOverridesResult.rows.map(o => [o.topping_id, o]));
-  const topStockResult = await fastify.pg.query(
-    `SELECT * FROM location_stock WHERE location_id = $1 AND item_type = 'topping' AND stock_status != 'in_stock'`, [locationId]
-  );
-  const topStock = new Map(topStockResult.rows.map(s => [s.item_id, s]));
-
-  const items = itemsResult.rows.map(item => {
-    const override = overrides.get(item.id);
-    const stockInfo = stock.get(item.id);
-    if (stockInfo && stockInfo.stock_status === 'discontinued') return null;
-    if (stockInfo && stockInfo.stock_status === 'out_of_stock') {
-      return { ...item, is_available: false, stock_status: stockInfo.stock_status, stock_notes: stockInfo.notes };
-    }
-    if (stockInfo && stockInfo.stock_status === 'low_stock') {
-      return { ...item, stock_status: 'low_stock', stock_quantity: stockInfo.quantity };
-    }
-    if (override) {
-      return { ...item, base_price: override.price_override || item.base_price, sizes: override.sizes_override || item.sizes, is_available: override.is_available !== false };
-    }
-    return item;
-  }).filter(Boolean);
-
-  const toppings = toppingsResult.rows.map(topping => {
-    const override = topOverrides.get(topping.id);
-    const stockInfo = topStock.get(topping.id);
-    if (stockInfo && stockInfo.stock_status === 'discontinued') return null;
-    if (stockInfo && stockInfo.stock_status === 'out_of_stock') {
-      return { ...topping, is_available: false, stock_status: stockInfo.stock_status, stock_notes: stockInfo.notes };
-    }
-    if (override) {
-      return { ...topping, base_price: override.price_override || topping.base_price, is_available: override.is_available !== false };
-    }
-    return topping;
-  }).filter(Boolean);
-
-  const menu = catsResult.rows.map(cat => ({
-    ...cat,
-    items: items.filter(i => i.category_id === cat.id)
-  }));
-
-  return {
-    location_id: locationId,
-    categories: menu,
-    toppings,
-  };
-}
+// Helper functions are imported from menuHelpers.js
+// createOrder remains here as it's order-specific
 
 // ============================================
 // HELPER: Create order (shared logic)
