@@ -1,21 +1,14 @@
-import type { Metadata } from "next";
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: "SliceLine — Store Dashboard",
-  description: "Pizza order management dashboard for Demo Pizza franchise locations",
+export const metadata = {
+  title: "SliceLine — Dashboard",
+  description: "Pizza franchise management and order tracking",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="bg-gray-50 text-gray-900 antialiased">
-        {children}
-      </body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }
