@@ -59,20 +59,122 @@ type StockAlert = {
   expected_restock_at: string | null;
 };
 
-const statusColors: Record<string, string> = {
-  pending: "bg-yellow-100 text-yellow-800",
-  confirmed: "bg-blue-100 text-blue-800",
-  preparing: "bg-orange-100 text-orange-800",
-  ready: "bg-green-100 text-green-800",
-  completed: "bg-gray-100 text-gray-600",
-  cancelled: "bg-red-100 text-red-800",
+type CallSegment = {
+  speaker: string;
+  text: string;
+  timestamp_ms: number;
+  intent: string | null;
 };
 
-const stockColors: Record<string, string> = {
-  low_stock: "bg-yellow-100 text-yellow-800",
-  out_of_stock: "bg-red-100 text-red-800",
-  discontinued: "bg-gray-200 text-gray-600",
+const statusConfig: Record<string, { label: string; bg: string; text: string; dot: string }> = {
+  pending: { label: "Pending", bg: "bg-amber-50", text: "text-amber-700", dot: "bg-amber-400" },
+  confirmed: { label: "Confirmed", bg: "bg-blue-50", text: "text-blue-700", dot: "bg-blue-400" },
+  preparing: { label: "Preparing", bg: "bg-orange-50", text: "text-orange-700", dot: "bg-orange-400" },
+  ready: { label: "Ready", bg: "bg-emerald-50", text: "text-emerald-700", dot: "bg-emerald-400" },
+  completed: { label: "Completed", bg: "bg-gray-50", text: "text-gray-500", dot: "bg-gray-400" },
+  cancelled: { label: "Cancelled", bg: "bg-red-50", text: "text-red-700", dot: "bg-red-400" },
 };
+
+const stockConfig: Record<string, { label: string; bg: string; text: string }> = {
+  low_stock: { label: "Low Stock", bg: "bg-amber-50", text: "text-amber-700" },
+  out_of_stock: { label: "Out of Stock", bg: "bg-red-50", text: "text-red-700" },
+  discontinued: { label: "Discontinued", bg: "bg-gray-100", text: "text-gray-500" },
+};
+
+// SVG Icons
+function IconPackage() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16.5 9.4l-9-5.19M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+      <line x1="12" y1="22.08" x2="12" y2="12" />
+    </svg>
+  );
+}
+
+function IconPhone() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
+    </svg>
+  );
+}
+
+function IconCheck() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+function IconDollar() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="1" x2="12" y2="23" />
+      <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
+    </svg>
+  );
+}
+
+function IconChart() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="20" x2="18" y2="10" />
+      <line x1="12" y1="20" x2="12" y2="4" />
+      <line x1="6" y1="20" x2="6" y2="14" />
+    </svg>
+  );
+}
+
+function IconAlert() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  );
+}
+
+function IconClock() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </svg>
+  );
+}
+
+function IconRefresh() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 4 23 10 17 10" />
+      <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" />
+    </svg>
+  );
+}
+
+function IconTranscript() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
+    </svg>
+  );
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function formatCurrency(val: number): string {
+  return "$" + val.toFixed(2);
+}
 
 export default function Dashboard() {
   const [locations, setLocations] = useState<Location[]>([]);
@@ -91,10 +193,10 @@ export default function Dashboard() {
   });
   const [selectedCall, setSelectedCall] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string>("");
+  const [transcriptSegments, setTranscriptSegments] = useState<CallSegment[]>([]);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  // Load locations
   useEffect(() => {
     fetch(`${API_URL}/api/locations?is_active=true`)
       .then((r) => r.json())
@@ -106,7 +208,6 @@ export default function Dashboard() {
       .catch(console.error);
   }, []);
 
-  // Load dashboard data
   const loadDashboard = () => {
     if (!selectedLocation) return;
     setLoading(true);
@@ -130,34 +231,27 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => {
-    loadDashboard();
-  }, [selectedLocation]);
+  useEffect(() => { loadDashboard(); }, [selectedLocation]);
 
-  // Auto-refresh every 15 seconds
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(loadDashboard, 15000);
     return () => clearInterval(interval);
   }, [autoRefresh, selectedLocation]);
 
-  // Load call transcript
   const loadTranscript = (callId: string) => {
     setSelectedCall(callId);
+    setTranscript("Loading...");
+    setTranscriptSegments([]);
     fetch(`${API_URL}/api/calls/${callId}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.segments && data.segments.length) {
-          setTranscript(
-            data.segments
-              .map(
-                (s: { speaker: string; text: string }) =>
-                  `[${s.speaker === "agent" ? "🤖 Agent" : "👤 Customer"}] ${s.text}`
-              )
-              .join("\n\n")
-          );
+          setTranscriptSegments(data.segments);
+          setTranscript("");
         } else {
           setTranscript(data.transcript_text || "No transcript available.");
+          setTranscriptSegments([]);
         }
       })
       .catch(() => setTranscript("Error loading transcript."));
@@ -166,22 +260,27 @@ export default function Dashboard() {
   const selectedLoc = locations.find((l) => l.id === selectedLocation);
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <header className="bg-red-600 text-white shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+      <header className="bg-slate-900 text-white">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="text-3xl">🍕</span>
+            <div className="w-8 h-8 bg-red-500 rounded-lg flex items-center justify-center">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+                <path d="M15.5 15.5L19 19M8 11a3 3 0 105 0 3 3 0 00-5 0z" />
+                <path d="M21 11a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">SliceLine</h1>
-              <p className="text-red-100 text-sm">Store Dashboard</p>
+              <h1 className="text-lg font-semibold tracking-tight">SliceLine</h1>
+              <p className="text-xs text-slate-400">Store Operations</p>
             </div>
           </div>
           <div className="flex items-center gap-4">
             <select
               value={selectedLocation}
               onChange={(e) => setSelectedLocation(e.target.value)}
-              className="bg-red-700 text-white border border-red-500 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
+              className="bg-slate-800 text-white border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
             >
               {locations.map((loc) => (
                 <option key={loc.id} value={loc.id}>
@@ -189,216 +288,195 @@ export default function Dashboard() {
                 </option>
               ))}
             </select>
-            <label className="flex items-center gap-2 text-sm text-red-100">
+            <label className="flex items-center gap-2 text-xs text-slate-400 select-none">
               <input
                 type="checkbox"
                 checked={autoRefresh}
                 onChange={(e) => setAutoRefresh(e.target.checked)}
-                className="rounded"
+                className="rounded border-slate-600 text-red-500 focus:ring-red-500"
               />
               Auto-refresh
             </label>
             <button
               onClick={loadDashboard}
-              className="bg-red-700 hover:bg-red-800 px-3 py-2 rounded-lg text-sm font-medium"
+              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
             >
-              ↻ Refresh
+              <IconRefresh /> Refresh
             </button>
           </div>
         </div>
       </header>
 
-      {/* Store Info Bar */}
+      {/* Store info bar */}
       {selectedLoc && (
-        <div className="bg-white border-b px-4 py-2">
-          <div className="max-w-7xl mx-auto flex items-center justify-between text-sm text-gray-600">
-            <span>
-              📍 {selectedLoc.street}, {selectedLoc.city}, {selectedLoc.state} {selectedLoc.zip}
-            </span>
-            <span>📞 {selectedLoc.phone}</span>
+        <div className="bg-white border-b border-slate-200 px-6 py-2">
+          <div className="max-w-7xl mx-auto flex items-center justify-between text-xs text-slate-500">
+            <span>{selectedLoc.street}, {selectedLoc.city}, {selectedLoc.state} {selectedLoc.zip}</span>
+            <span>{selectedLoc.phone}</span>
           </div>
         </div>
       )}
 
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        {/* Stats Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-          <StatCard
-            label="Active Orders"
-            value={stats.active_orders}
-            icon="📦"
-            color="bg-blue-50 border-blue-200"
-          />
-          <StatCard
-            label="Active Calls"
-            value={stats.active_calls}
-            icon="📞"
-            color="bg-green-50 border-green-200"
-          />
-          <StatCard
-            label="Orders (24h)"
-            value={stats.orders_completed_24h}
-            icon="✅"
-            color="bg-purple-50 border-purple-200"
-          />
-          <StatCard
-            label="Revenue (24h)"
-            value={`$${stats.revenue_24h.toFixed(2)}`}
-            icon="💰"
-            color="bg-yellow-50 border-yellow-200"
-          />
-          <StatCard
-            label="Avg Order"
-            value={`$${stats.avg_order_value.toFixed(2)}`}
-            icon="📊"
-            color="bg-pink-50 border-pink-200"
-          />
+      <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <StatCard icon={<IconPackage />} label="Active Orders" value={stats.active_orders} color="blue" />
+          <StatCard icon={<IconPhone />} label="Active Calls" value={stats.active_calls} color="emerald" />
+          <StatCard icon={<IconCheck />} label="Completed (24h)" value={stats.orders_completed_24h} color="violet" />
+          <StatCard icon={<IconDollar />} label="Revenue (24h)" value={formatCurrency(stats.revenue_24h)} color="amber" />
+          <StatCard icon={<IconChart />} label="Avg Order" value={formatCurrency(stats.avg_order_value)} color="rose" />
         </div>
 
-        {/* Main Content Grid */}
+        {/* Main grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Active Orders */}
-          <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border overflow-hidden">
-            <div className="px-4 py-3 bg-gray-50 border-b flex items-center justify-between">
-              <h2 className="font-semibold text-lg">
-                📦 Active Orders
+          <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <IconPackage />
+                Active Orders
                 {activeOrders.length > 0 && (
-                  <span className="ml-2 bg-blue-100 text-blue-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                  <span className="ml-1 bg-blue-100 text-blue-700 text-xs font-bold px-2 py-0.5 rounded-full">
                     {activeOrders.length}
                   </span>
                 )}
-              </h2>
+              </div>
             </div>
             {activeOrders.length === 0 ? (
-              <div className="p-8 text-center text-gray-400">
-                <p className="text-4xl mb-2">🍕</p>
-                <p>No active orders</p>
+              <div className="p-12 text-center">
+                <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                  <IconPackage />
+                </div>
+                <p className="text-sm text-slate-400">No active orders</p>
               </div>
             ) : (
-              <div className="divide-y max-h-96 overflow-y-auto">
-                {activeOrders.map((order) => (
-                  <div key={order.id} className="p-4 hover:bg-gray-50">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono font-bold">{order.order_number}</span>
-                      <span
-                        className={`text-xs font-semibold px-2 py-1 rounded-full ${
-                          statusColors[order.status] || "bg-gray-100"
-                        }`}
-                      >
-                        {order.status.toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm text-gray-600">
-                      <span>
-                        {order.customer_name} · {order.order_type}
-                      </span>
-                      <span className="font-semibold">${order.total.toFixed(2)}</span>
-                    </div>
-                    {order.items && order.items.length > 0 && (
-                      <div className="mt-2 text-xs text-gray-500">
-                        {order.items.map((item, i) => (
-                          <span key={i}>
-                            {item.quantity}× {item.name}
-                            {item.size ? ` (${item.size})` : ""}
-                            {i < order.items.length - 1 ? " · " : ""}
-                          </span>
-                        ))}
+              <div className="divide-y divide-slate-50 max-h-96 overflow-y-auto">
+                {activeOrders.map((order) => {
+                  const sc = statusConfig[order.status] || statusConfig.pending;
+                  return (
+                    <div key={order.id} className="px-5 py-3 hover:bg-slate-50/50 transition-colors">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-mono text-sm font-semibold text-slate-800">{order.order_number}</span>
+                        <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full ${sc.bg} ${sc.text}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                          {sc.label}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <div className="flex items-center justify-between text-xs text-slate-500">
+                        <span>{order.customer_name} · {order.order_type}</span>
+                        <span className="font-semibold text-slate-700">{formatCurrency(order.total)}</span>
+                      </div>
+                      {order.items && order.items.length > 0 && (
+                        <div className="mt-1.5 text-xs text-slate-400 truncate">
+                          {order.items.map((item, i) => (
+                            <span key={i}>
+                              {item.quantity}× {item.name}{item.size ? ` (${item.size})` : ""}
+                              {i < order.items.length - 1 ? " · " : ""}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
 
           {/* Stock Alerts */}
-          <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-            <div className="px-4 py-3 bg-gray-50 border-b">
-              <h2 className="font-semibold text-lg">
-                ⚠️ Stock Alerts
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <IconAlert />
+                Stock Alerts
                 {stockAlerts.length > 0 && (
-                  <span className="ml-2 bg-red-100 text-red-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                  <span className="ml-1 bg-red-100 text-red-700 text-xs font-bold px-2 py-0.5 rounded-full">
                     {stockAlerts.length}
                   </span>
                 )}
-              </h2>
+              </div>
             </div>
             {stockAlerts.length === 0 ? (
-              <div className="p-8 text-center text-gray-400">
-                <p className="text-4xl mb-2">✅</p>
-                <p>All items in stock</p>
+              <div className="p-12 text-center">
+                <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-500">
+                  <IconCheck />
+                </div>
+                <p className="text-sm text-slate-400">All items in stock</p>
               </div>
             ) : (
-              <div className="divide-y max-h-64 overflow-y-auto">
-                {stockAlerts.map((alert, i) => (
-                  <div key={i} className="p-3 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">{alert.item_name}</span>
-                      <span
-                        className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                          stockColors[alert.stock_status] || "bg-gray-100"
-                        }`}
-                      >
-                        {alert.stock_status.replace(/_/g, " ").toUpperCase()}
-                      </span>
+              <div className="divide-y divide-slate-50 max-h-64 overflow-y-auto">
+                {stockAlerts.map((alert, i) => {
+                  const sc = stockConfig[alert.stock_status] || stockConfig.out_of_stock;
+                  return (
+                    <div key={i} className="px-5 py-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-slate-700">{alert.item_name}</span>
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${sc.bg} ${sc.text}`}>
+                          {sc.label}
+                        </span>
+                      </div>
+                      {alert.notes && <p className="text-xs text-slate-400 mt-1">{alert.notes}</p>}
                     </div>
-                    {alert.notes && (
-                      <p className="text-xs text-gray-500 mt-1">{alert.notes}</p>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
         </div>
 
-        {/* Second Row: Recent Calls + Transcript */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+        {/* Calls + Transcript */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Recent Calls */}
-          <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-            <div className="px-4 py-3 bg-gray-50 border-b">
-              <h2 className="font-semibold text-lg">
-                📞 Recent Calls
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <IconPhone />
+                Recent Calls
                 {recentCalls.length > 0 && (
-                  <span className="ml-2 bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                  <span className="ml-1 bg-emerald-100 text-emerald-700 text-xs font-bold px-2 py-0.5 rounded-full">
                     {recentCalls.length}
                   </span>
                 )}
-              </h2>
+              </div>
             </div>
             {recentCalls.length === 0 ? (
-              <div className="p-8 text-center text-gray-400">
-                <p className="text-4xl mb-2">📞</p>
-                <p>No recent calls</p>
+              <div className="p-12 text-center">
+                <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                  <IconPhone />
+                </div>
+                <p className="text-sm text-slate-400">No recent calls</p>
               </div>
             ) : (
-              <div className="divide-y max-h-72 overflow-y-auto">
+              <div className="divide-y divide-slate-50 max-h-72 overflow-y-auto">
                 {recentCalls.map((call) => (
                   <button
                     key={call.id}
                     onClick={() => loadTranscript(call.id)}
-                    className={`w-full text-left p-3 hover:bg-gray-50 transition-colors ${
-                      selectedCall === call.id ? "bg-blue-50" : ""
+                    className={`w-full text-left px-5 py-3 hover:bg-slate-50 transition-colors ${
+                      selectedCall === call.id ? "bg-blue-50/50" : ""
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-mono">{call.caller_phone || "Unknown"}</span>
+                      <span className="text-sm font-mono text-slate-700">{call.caller_phone || "Unknown"}</span>
                       <span
-                        className={`text-xs px-2 py-0.5 rounded-full ${
+                        className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
                           call.status === "completed"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-yellow-100 text-yellow-700"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-amber-50 text-amber-700"
                         }`}
                       >
                         {call.status}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between text-xs text-gray-500 mt-1">
-                      <span>{call.duration_seconds ? `${Math.floor(call.duration_seconds / 60)}m ${call.duration_seconds % 60}s` : "—"}</span>
+                    <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
+                      <span className="flex items-center gap-1">
+                        <IconClock />
+                        {call.duration_seconds ? `${Math.floor(call.duration_seconds / 60)}m ${call.duration_seconds % 60}s` : "—"}
+                      </span>
                       <span>
-                        {call.order_accuracy_verified === true && "✅ Verified"}
-                        {call.order_accuracy_verified === false && "❌ Issue"}
-                        {call.order_accuracy_verified === null && "⏳ Unverified"}
+                        {call.order_accuracy_verified === true && "Verified"}
+                        {call.order_accuracy_verified === false && "Issue"}
+                        {call.order_accuracy_verified === null && "Unverified"}
                       </span>
                     </div>
                   </button>
@@ -407,103 +485,144 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* Call Transcript */}
-          <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-            <div className="px-4 py-3 bg-gray-50 border-b">
-              <h2 className="font-semibold text-lg">📝 Call Transcript</h2>
+          {/* Transcript */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <IconTranscript />
+                Call Transcript
+              </div>
             </div>
             <div className="p-4 max-h-72 overflow-y-auto">
               {selectedCall ? (
-                <pre className="whitespace-pre-wrap text-sm font-mono text-gray-700 leading-relaxed">
-                  {transcript || "Loading..."}
-                </pre>
+                transcriptSegments.length > 0 ? (
+                  <div className="space-y-3">
+                    {transcriptSegments.map((seg, i) => (
+                      <div key={i} className={`flex gap-2 ${seg.speaker === "agent" ? "" : "flex-row-reverse"}`}>
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                          seg.speaker === "agent"
+                            ? "bg-blue-100 text-blue-700"
+                            : "bg-slate-200 text-slate-600"
+                        }`}>
+                          {seg.speaker === "agent" ? "AI" : "C"}
+                        </div>
+                        <div className={`rounded-lg px-3 py-2 text-sm leading-relaxed max-w-[85%] ${
+                          seg.speaker === "agent"
+                            ? "bg-blue-50 text-slate-700"
+                            : "bg-slate-100 text-slate-700"
+                        }`}>
+                          {seg.text}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <pre className="whitespace-pre-wrap text-sm text-slate-600 leading-relaxed">{transcript}</pre>
+                )
               ) : (
-                <div className="text-center text-gray-400 py-8">
-                  <p className="text-4xl mb-2">📝</p>
-                  <p>Select a call to view transcript</p>
+                <div className="text-center py-12">
+                  <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                    <IconTranscript />
+                  </div>
+                  <p className="text-sm text-slate-400">Select a call to view transcript</p>
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* Recent Completed Orders */}
-        <div className="mt-6 bg-white rounded-xl shadow-sm border overflow-hidden">
-          <div className="px-4 py-3 bg-gray-50 border-b">
-            <h2 className="font-semibold text-lg">📋 Recent Orders (24h)</h2>
+        {/* Recent Orders */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <IconCheck />
+              Recent Orders (24h)
+            </div>
           </div>
           {recentOrders.length === 0 ? (
-            <div className="p-8 text-center text-gray-400">
-              <p>No completed orders in the last 24 hours</p>
+            <div className="p-12 text-center">
+              <p className="text-sm text-slate-400">No completed orders in the last 24 hours</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
+                <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
                   <tr>
-                    <th className="px-4 py-2 text-left">Order #</th>
-                    <th className="px-4 py-2 text-left">Customer</th>
-                    <th className="px-4 py-2 text-left">Type</th>
-                    <th className="px-4 py-2 text-left">Items</th>
-                    <th className="px-4 py-2 text-right">Total</th>
-                    <th className="px-4 py-2 text-left">Status</th>
-                    <th className="px-4 py-2 text-left">Time</th>
+                    <th className="px-5 py-3 text-left font-medium">Order #</th>
+                    <th className="px-5 py-3 text-left font-medium">Customer</th>
+                    <th className="px-5 py-3 text-left font-medium">Type</th>
+                    <th className="px-5 py-3 text-left font-medium">Items</th>
+                    <th className="px-5 py-3 text-right font-medium">Total</th>
+                    <th className="px-5 py-3 text-left font-medium">Status</th>
+                    <th className="px-5 py-3 text-left font-medium">Time</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
-                  {recentOrders.map((order) => (
-                    <tr key={order.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-2 font-mono">{order.order_number}</td>
-                      <td className="px-4 py-2">{order.customer_name}</td>
-                      <td className="px-4 py-2 capitalize">{order.order_type}</td>
-                      <td className="px-4 py-2">
-                        {order.items?.length || 0} item(s)
-                      </td>
-                      <td className="px-4 py-2 text-right font-semibold">
-                        ${order.total.toFixed(2)}
-                      </td>
-                      <td className="px-4 py-2">
-                        <span
-                          className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                            statusColors[order.status] || "bg-gray-100"
-                          }`}
-                        >
-                          {order.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2 text-gray-500">
-                        {new Date(order.created_at).toLocaleTimeString()}
-                      </td>
-                    </tr>
-                  ))}
+                <tbody className="divide-y divide-slate-50">
+                  {recentOrders.map((order) => {
+                    const sc = statusConfig[order.status] || statusConfig.pending;
+                    return (
+                      <tr key={order.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-5 py-3 font-mono text-xs font-semibold text-slate-700">{order.order_number}</td>
+                        <td className="px-5 py-3 text-slate-600">{order.customer_name}</td>
+                        <td className="px-5 py-3 capitalize text-slate-600">{order.order_type}</td>
+                        <td className="px-5 py-3 text-slate-500">{order.items?.length || 0} item(s)</td>
+                        <td className="px-5 py-3 text-right font-semibold text-slate-700">{formatCurrency(order.total)}</td>
+                        <td className="px-5 py-3">
+                          <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full ${sc.bg} ${sc.text}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                            {sc.label}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-slate-400 flex items-center gap-1">
+                          <IconClock /> {formatTime(order.created_at)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </div>
       </main>
+
+      {/* Footer */}
+      <footer className="border-t border-slate-200 bg-white mt-8">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between text-xs text-slate-400">
+          <span>SliceLine — Demo Pizza Operations Dashboard</span>
+          <span>Auto-refresh {autoRefresh ? "on" : "off"} · 15s interval</span>
+        </div>
+      </footer>
     </div>
   );
 }
 
 function StatCard({
+  icon,
   label,
   value,
-  icon,
   color,
 }: {
+  icon: React.ReactNode;
   label: string;
   value: string | number;
-  icon: string;
   color: string;
 }) {
+  const colors: Record<string, { bg: string; border: string; icon: string }> = {
+    blue: { bg: "bg-blue-50", border: "border-blue-100", icon: "text-blue-500" },
+    emerald: { bg: "bg-emerald-50", border: "border-emerald-100", icon: "text-emerald-500" },
+    violet: { bg: "bg-violet-50", border: "border-violet-100", icon: "text-violet-500" },
+    amber: { bg: "bg-amber-50", border: "border-amber-100", icon: "text-amber-500" },
+    rose: { bg: "bg-rose-50", border: "border-rose-100", icon: "text-rose-500" },
+  };
+  const c = colors[color] || colors.blue;
   return (
-    <div className={`${color} border rounded-xl p-4`}>
+    <div className={`${c.bg} ${c.border} border rounded-xl p-4`}>
       <div className="flex items-center justify-between">
-        <span className="text-2xl">{icon}</span>
-        <span className="text-2xl font-bold">{value}</span>
+        <span className={`${c.icon}`}>{icon}</span>
+        <span className="text-2xl font-bold text-slate-800">{value}</span>
       </div>
-      <p className="text-sm text-gray-600 mt-1">{label}</p>
+      <p className="text-xs text-slate-500 mt-1.5 font-medium">{label}</p>
     </div>
   );
 }
