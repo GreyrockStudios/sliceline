@@ -16,6 +16,15 @@ module.exports = async function (fastify, opts) {
       [locationId]
     );
 
+    // Attach items to active orders
+    for (const order of activeOrders) {
+      const { rows: items } = await fastify.pg.query(
+        'SELECT name, size, quantity, unit_price, total_price, customizations, special_requests FROM order_items WHERE order_id = $1 ORDER BY created_at',
+        [order.id]
+      );
+      order.items = items;
+    }
+
     // Recent completed orders (last 24h)
     const { rows: recentOrders } = await fastify.pg.query(
       `SELECT id, order_number, customer_name, order_type, status, total, created_at
@@ -57,6 +66,15 @@ module.exports = async function (fastify, opts) {
       [locationId]
     );
 
+    // Average call duration (last 24h)
+    const { rows: [callDur] } = await fastify.pg.query(
+      `SELECT COALESCE(AVG(duration_seconds), 0) AS avg_call_duration
+       FROM calls
+       WHERE location_id = $1 AND status = 'completed'
+         AND started_at >= NOW() - INTERVAL '24 hours'`,
+      [locationId]
+    );
+
     // Stock alerts
     const { rows: stockAlerts } = await fastify.pg.query(
       `SELECT ls.item_type, ls.item_id, ls.stock_status, ls.quantity, ls.notes, ls.expected_restock_at,
@@ -95,6 +113,7 @@ module.exports = async function (fastify, opts) {
         orders_cancelled_24h: parseInt(stats?.orders_cancelled_24h || 0),
         revenue_24h: parseFloat(stats?.revenue_24h || 0),
         avg_order_value: parseFloat(stats?.avg_order_value || 0),
+        avg_call_duration: parseFloat(callDur?.avg_call_duration || stats?.avg_call_duration || 0),
       },
       stock_alerts: stockAlerts,
       active_specials: specials,
