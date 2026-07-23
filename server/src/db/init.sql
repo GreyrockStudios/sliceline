@@ -33,6 +33,26 @@ CREATE TABLE locations (
   timezone VARCHAR(50) DEFAULT 'America/New_York',
   is_active BOOLEAN DEFAULT true,
   delivery_radius_km INTEGER DEFAULT 8,
+  -- Hours of operation (JSON array of weekly schedule)
+  -- [{day: 0, open: "11:00", close: "23:00", is_closed: false}, ...]
+  -- day: 0=Sun, 1=Mon, ..., 6=Sat
+  hours JSONB DEFAULT '[
+    {"day": 0, "open": "11:00", "close": "22:00", "is_closed": false},
+    {"day": 1, "open": "11:00", "close": "23:00", "is_closed": false},
+    {"day": 2, "open": "11:00", "close": "23:00", "is_closed": false},
+    {"day": 3, "open": "11:00", "close": "23:00", "is_closed": false},
+    {"day": 4, "open": "11:00", "close": "23:00", "is_closed": false},
+    {"day": 5, "open": "11:00", "close": "24:00", "is_closed": false},
+    {"day": 6, "open": "11:00", "close": "24:00", "is_closed": false}
+  ]'::jsonb,
+  -- Phone greeting played/spoken when call connects
+  phone_greeting TEXT DEFAULT 'Thank you for calling Demo Pizza! How can I help you today?',
+  -- Delivery configuration
+  delivery_enabled BOOLEAN DEFAULT true,
+  delivery_fee DECIMAL(5, 2) DEFAULT 0,
+  delivery_min_order DECIMAL(8, 2) DEFAULT 0,
+  -- Delivery zones: [{radius_km: 5, fee: 3.00}, {radius_km: 8, fee: 5.00}]
+  delivery_zones JSONB DEFAULT '[{"radius_km": 5, "fee": 3.00}, {"radius_km": 8, "fee": 5.00}]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(franchise_id, store_number)
@@ -69,6 +89,9 @@ CREATE TABLE menu_items (
   base_price DECIMAL(8, 2) NOT NULL,
   sizes JSONB DEFAULT '[]',  -- [{name: "Small", price: 12.99}, {name: "Medium", price: 15.99}, ...]
   is_available BOOLEAN DEFAULT true,
+  -- Time availability: when this item is available
+  -- null = always available, [{day: 1, start: "11:00", end: "14:00"}] = weekday lunch only
+  available_times JSONB DEFAULT NULL,
   display_order INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),

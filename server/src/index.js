@@ -8,6 +8,7 @@ const locationRoutes = require('./routes/locations');
 const callRoutes = require('./routes/calls');
 const dashboardRoutes = require('./routes/dashboard');
 const retellRoutes = require('./routes/retell');
+const adminRoutes = require('./routes/admin');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const DATABASE_URL = process.env.DATABASE_URL || 'postgres://sliceline:sliceline_dev@localhost:5432/sliceline';
@@ -25,6 +26,7 @@ async function start() {
   fastify.register(callRoutes, { prefix: '/api/calls' });
   fastify.register(dashboardRoutes, { prefix: '/api/dashboard' });
   fastify.register(retellRoutes, { prefix: '/api/retell' });
+  fastify.register(adminRoutes, { prefix: '/api/admin' });
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', service: 'sliceline' }));
