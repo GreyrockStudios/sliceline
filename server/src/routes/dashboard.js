@@ -11,7 +11,7 @@ module.exports = async function (fastify, opts) {
     const { rows: activeOrders } = await fastify.pg.query(
       `SELECT id, order_number, customer_name, order_type, status, total, created_at, estimated_ready_time
        FROM orders
-       WHERE location_id = $1 AND status IN ('pending', 'confirmed', 'preparing')
+       WHERE location_id = $1 AND status IN ('pending', 'confirmed', 'preparing', 'ready')
        ORDER BY created_at ASC`,
       [locationId]
     );
@@ -107,7 +107,7 @@ module.exports = async function (fastify, opts) {
 
     const { rows: [stats] } = await fastify.pg.query(
       `SELECT
-         COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed', 'preparing')) AS active_orders,
+         COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed', 'preparing', 'ready')) AS active_orders,
          COUNT(*) FILTER (WHERE status = 'in_progress') AS active_calls,
          COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours') AS orders_last_24h,
          COALESCE(SUM(total) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours'), 0) AS revenue_last_24h
@@ -122,7 +122,7 @@ module.exports = async function (fastify, opts) {
     // Fallback to simpler query
     const { rows: [orderStats] } = await fastify.pg.query(
       `SELECT
-         COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed', 'preparing')) AS active_orders,
+         COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed', 'preparing', 'ready')) AS active_orders,
          COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours') AS orders_last_24h,
          COALESCE(SUM(total) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours'), 0) AS revenue_last_24h
        FROM orders WHERE location_id = $1`,
