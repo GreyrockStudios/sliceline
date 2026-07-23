@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
@@ -139,9 +139,6 @@ export default function Dashboard() {
   const [selectedCall, setSelectedCall] = useState<string | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<CallSegment[]>([]);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
-  const [locationSearch, setLocationSearch] = useState("");
-  const [showLocationDropdown, setShowLocationDropdown] = useState(false);
-  const locationRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch(`${API_URL}/api/locations?is_active=true`)
@@ -152,16 +149,6 @@ export default function Dashboard() {
         if (locs.length > 0 && !selectedLocation) setSelectedLocation(locs[0].id);
       })
       .catch(console.error);
-  }, []);
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (locationRef.current && !locationRef.current.contains(e.target as Node)) {
-        setShowLocationDropdown(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   const loadDashboard = () => {
@@ -210,9 +197,6 @@ export default function Dashboard() {
   };
 
   const selectedLoc = locations.find((l) => l.id === selectedLocation);
-  const filteredLocations = locations.filter((l) =>
-    `${l.store_number} ${l.name} ${l.city}`.toLowerCase().includes(locationSearch.toLowerCase())
-  );
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -229,54 +213,17 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {/* Location selector with search */}
-            <div className="relative" ref={locationRef}>
-              <button
-                onClick={(e) => { e.stopPropagation(); setShowLocationDropdown(!showLocationDropdown); }}
-                className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm hover:bg-slate-700 transition-colors w-full sm:w-auto sm:max-w-[300px]"
-              >
-                <span className="truncate">
-                  {selectedLoc ? (
-                    <>
-                      <span className="font-medium">{selectedLoc.store_number}</span>
-                      <span className="text-slate-400"> — {selectedLoc.city}</span>
-                    </>
-                  ) : "Select location"}
-                </span>
-                <span className={`ml-auto transition-transform ${showLocationDropdown ? "rotate-180" : ""}`}><IconChevronDown /></span>
-              </button>
-              {showLocationDropdown && (
-                <div className="absolute left-0 sm:left-auto right-0 mt-2 w-[calc(100vw-2rem)] sm:w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
-                  <div className="p-2 border-b border-slate-100">
-                    <input
-                      type="text"
-                      placeholder="Search locations..."
-                      value={locationSearch}
-                      onChange={(e) => setLocationSearch(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent text-slate-900"
-                      autoFocus
-                    />
-                  </div>
-                  <div className="max-h-64 overflow-y-auto">
-                    {filteredLocations.map((loc) => (
-                      <button
-                        key={loc.id}
-                        onClick={() => { setSelectedLocation(loc.id); setShowLocationDropdown(false); setLocationSearch(""); }}
-                        className={`w-full text-left px-3 py-2.5 hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0 ${
-                          loc.id === selectedLocation ? "bg-red-50" : ""
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium text-sm text-slate-800">{loc.store_number} — {loc.name}</span>
-                          {loc.id === selectedLocation && <span className="w-2 h-2 bg-red-500 rounded-full" />}
-                        </div>
-                        <p className="text-xs text-slate-400 mt-0.5">{loc.city}, {loc.state}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            <select
+              value={selectedLocation}
+              onChange={(e) => setSelectedLocation(e.target.value)}
+              className="bg-slate-800 text-white border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent max-w-[280px]"
+            >
+              {locations.map((loc) => (
+                <option key={loc.id} value={loc.id}>
+                  {loc.store_number} — {loc.name} ({loc.city})
+                </option>
+              ))}
+            </select>
             <button
               onClick={loadDashboard}
               className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
