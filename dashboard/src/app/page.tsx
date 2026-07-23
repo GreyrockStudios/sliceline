@@ -232,21 +232,21 @@ export default function Dashboard() {
             {/* Location selector with search */}
             <div className="relative" ref={locationRef}>
               <button
-                onClick={() => setShowLocationDropdown(!showLocationDropdown)}
-                className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm hover:bg-slate-700 transition-colors max-w-[220px] sm:max-w-[300px]"
+                onClick={(e) => { e.stopPropagation(); setShowLocationDropdown(!showLocationDropdown); }}
+                className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm hover:bg-slate-700 transition-colors w-full sm:w-auto sm:max-w-[300px]"
               >
                 <span className="truncate">
                   {selectedLoc ? (
                     <>
                       <span className="font-medium">{selectedLoc.store_number}</span>
-                      <span className="hidden sm:inline text-slate-400"> — {selectedLoc.city}</span>
+                      <span className="text-slate-400"> — {selectedLoc.city}</span>
                     </>
                   ) : "Select location"}
                 </span>
-                <IconChevronDown />
+                <span className={`ml-auto transition-transform ${showLocationDropdown ? "rotate-180" : ""}`}><IconChevronDown /></span>
               </button>
               {showLocationDropdown && (
-                <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
+                <div className="absolute left-0 sm:left-auto right-0 mt-2 w-[calc(100vw-2rem)] sm:w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
                   <div className="p-2 border-b border-slate-100">
                     <input
                       type="text"
