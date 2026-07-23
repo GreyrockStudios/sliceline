@@ -124,21 +124,6 @@ module.exports = async function (fastify, opts) {
   fastify.get('/:locationId/stats', async (request, reply) => {
     const { locationId } = request.params;
 
-    const { rows: [stats] } = await fastify.pg.query(
-      `SELECT
-         COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed', 'preparing', 'ready')) AS active_orders,
-         COUNT(*) FILTER (WHERE status = 'in_progress') AS active_calls,
-         COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours') AS orders_last_24h,
-         COALESCE(SUM(total) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours'), 0) AS revenue_last_24h
-       FROM (
-         SELECT id, status, total, created_at FROM orders WHERE location_id = $1
-         UNION ALL
-         SELECT id, status, 0, created_at FROM calls WHERE location_id = $1
-       ) sub`,
-      [locationId]
-    );
-
-    // Fallback to simpler query
     const { rows: [orderStats] } = await fastify.pg.query(
       `SELECT
          COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed', 'preparing', 'ready')) AS active_orders,
@@ -160,5 +145,52 @@ module.exports = async function (fastify, opts) {
       orders_last_24h: parseInt(orderStats?.orders_last_24h || 0),
       revenue_last_24h: parseFloat(orderStats?.revenue_last_24h || 0),
     };
+  });
+
+  // GET /api/dashboard/:locationId/stream — SSE for real-time updates
+  fastify.get('/:locationId/stream', async (request, reply) => {
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+
+    const locationId = request.params.locationId;
+
+    // Send initial heartbeat
+    reply.raw.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
+
+    // Poll every 5 seconds
+    const interval = setInterval(async () => {
+      try {
+        const { rows: [stats] } = await fastify.pg.query(
+          `SELECT
+             COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed', 'preparing', 'ready')) AS active_orders,
+             COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours') AS orders_last_24h
+           FROM orders WHERE location_id = $1`,
+          [locationId]
+        );
+        const { rows: activeOrders } = await fastify.pg.query(
+          `SELECT id, order_number, customer_name, order_type, status, total, created_at
+           FROM orders WHERE location_id = $1 AND status IN ('pending', 'confirmed', 'preparing', 'ready')
+           ORDER BY created_at ASC`, [locationId]
+        );
+        reply.raw.write(`data: ${JSON.stringify({
+          type: 'update',
+          active_orders: parseInt(stats?.active_orders || 0),
+          orders: activeOrders.map(o => ({
+            id: o.id, order_number: o.order_number, customer_name: o.customer_name,
+            order_type: o.order_type, status: o.status, total: Number(o.total), created_at: o.created_at
+          }))
+        })}\n\n`);
+      } catch (err) {
+        // Connection likely closed
+      }
+    }, 5000);
+
+    request.raw.on('close', () => {
+      clearInterval(interval);
+    });
   });
 };

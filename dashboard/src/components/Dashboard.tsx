@@ -49,6 +49,7 @@ export default function Dashboard() {
   const [recentOrders, setRecentOrders] = useState([]);
   const [recentCalls, setRecentCalls] = useState([]);
   const [stockAlerts, setStockAlerts] = useState([]);
+  const [expandedOrder, setExpandedOrder] = useState(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -136,7 +137,8 @@ export default function Dashboard() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         {activeTab === "orders" && (
           <OrdersTab stats={stats} activeOrders={activeOrders} recentOrders={recentOrders}
-            recentCalls={recentCalls} stockAlerts={stockAlerts} updateOrderStatus={updateOrderStatus} />
+            recentCalls={recentCalls} stockAlerts={stockAlerts} updateOrderStatus={updateOrderStatus}
+            expandedOrder={expandedOrder} setExpandedOrder={setExpandedOrder} />
         )}
         {activeTab === "stock" && selectedLocation && (
           <StockTab locationId={selectedLocation} locationName={locName} />
@@ -152,7 +154,7 @@ export default function Dashboard() {
 
 // @ts-nocheck
 // === ORDERS TAB ===
-function OrdersTab({ stats, activeOrders, recentOrders, recentCalls, stockAlerts, updateOrderStatus }) {
+function OrdersTab({ stats, activeOrders, recentOrders, recentCalls, stockAlerts, updateOrderStatus, expandedOrder, setExpandedOrder }) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -193,7 +195,9 @@ function OrdersTab({ stats, activeOrders, recentOrders, recentCalls, stockAlerts
           <h2 className="text-sm font-semibold text-slate-800 mb-3">Active Orders</h2>
           <div className="space-y-2">
             {activeOrders.length ? activeOrders.map(o => (
-              <div key={o.id} className={`bg-white rounded-lg border-l-4 p-3 ${STATUS_COLORS[o.status] || "bg-white border-slate-200"}`}>
+              <div key={o.id}
+                className={`bg-white rounded-lg border-l-4 p-3 cursor-pointer transition-shadow hover:shadow-md ${STATUS_COLORS[o.status] || "bg-white border-slate-200"}`}
+                onClick={() => setExpandedOrder(expandedOrder === o.id ? null : o.id)}>
                 <div className="flex justify-between items-center mb-1">
                   <span className="font-semibold text-slate-800 text-sm">{o.order_number}</span>
                   <span className="text-xs font-medium capitalize">{o.status?.replace(/_/g, " ")}</span>
@@ -201,13 +205,33 @@ function OrdersTab({ stats, activeOrders, recentOrders, recentCalls, stockAlerts
                 <div className="text-xs text-slate-500">{o.customer_name} — {o.order_type} — {formatCurrency(o.total)}</div>
                 {(o.status === "confirmed" || o.status === "preparing") && (
                   <div className="flex gap-2 mt-2">
-                    {o.status === "confirmed" && <button onClick={() => updateOrderStatus(o.id, "preparing")} className="text-xs bg-orange-500 text-white px-2 py-1 rounded">Preparing</button>}
-                    {o.status === "preparing" && <button onClick={() => updateOrderStatus(o.id, o.order_type === "delivery" ? "out_for_delivery" : "ready")} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{o.order_type === "delivery" ? "Out for Delivery" : "Ready"}</button>}
+                    {o.status === "confirmed" && <button onClick={e => { e.stopPropagation(); updateOrderStatus(o.id, "preparing"); }} className="text-xs bg-orange-500 text-white px-2 py-1 rounded">Preparing</button>}
+                    {o.status === "preparing" && <button onClick={e => { e.stopPropagation(); updateOrderStatus(o.id, o.order_type === "delivery" ? "out_for_delivery" : "ready"); }} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{o.order_type === "delivery" ? "Out for Delivery" : "Ready"}</button>}
                   </div>
                 )}
-                {o.items && o.items.map(item => (
-                  <div key={item.id} className="text-xs text-slate-400 mt-0.5">{item.quantity}x {item.name} {item.size ? `(${item.size})` : ""}</div>
-                ))}
+                {expandedOrder === o.id && (
+                  <div className="mt-2 pt-2 border-t border-slate-100 space-y-1">
+                    {o.items && o.items.map(item => (
+                      <div key={item.id} className="text-xs">
+                        <span className="font-medium text-slate-700">{item.quantity}x {item.name}</span>
+                        {item.size && <span className="text-slate-400"> ({item.size})</span>}
+                        {item.customizations && (item.customizations.added_toppings || item.customizations.removed_toppings || item.customizations.extra_cheese) && (
+                          <span className="text-slate-500 ml-1">
+                            {item.customizations.added_toppings?.map(t => <span key={t.name} className="text-emerald-600">+{t.name}</span>)}
+                            {item.customizations.removed_toppings?.map(t => <span key={t} className="text-red-500">-{t}</span>)}
+                            {item.customizations.extra_cheese && <span className="text-emerald-600">+Extra Cheese</span>}
+                          </span>
+                        )}
+                        <span className="text-slate-400 ml-2">{formatCurrency(item.unit_price)}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between text-xs text-slate-500 mt-1 pt-1">
+                      <span>Subtotal: {formatCurrency(o.subtotal)}</span>
+                      <span>Tax: {formatCurrency(o.tax)}</span>
+                      <span className="font-semibold text-slate-700">Total: {formatCurrency(o.total)}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             )) : <p className="text-sm text-slate-400">No active orders</p>}
           </div>

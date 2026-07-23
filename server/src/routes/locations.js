@@ -32,27 +32,43 @@ module.exports = async function (fastify, opts) {
 
   // POST /api/locations/nearest — Find nearest location(s) by address or coordinates
   fastify.post('/nearest', async (request, reply) => {
-    const { latitude, longitude, address, radius_km, limit } = request.body;
+    let { latitude, longitude, address, radius_km, limit } = request.body;
 
-    // If address provided but no coords, we'd geocode here (stub for now)
-    // In production, integrate Google Maps or similar geocoding API
-    if (!latitude && !longitude && address) {
-      return reply.code(400).send({
-        error: 'Geocoding not yet implemented. Please provide latitude and longitude.',
-        hint: 'Use the Google Maps Geocoding API to convert addresses to coordinates.'
-      });
+    // Geocode address if no coordinates provided
+    if ((!latitude || !longitude) && address) {
+      const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+      if (!apiKey) {
+        return reply.code(501).send({
+          error: 'Geocoding not configured. Set GOOGLE_MAPS_API_KEY or provide latitude and longitude.'
+        });
+      }
+      try {
+        const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}&region=ca`;
+        const resp = await fetch(geocodeUrl);
+        const data = await resp.json();
+        if (data.status === 'OK' && data.results.length) {
+          latitude = data.results[0].geometry.location.lat;
+          longitude = data.results[0].geometry.location.lng;
+        } else {
+          return reply.code(404).send({ error: 'Could not geocode that address. Please try a more specific address.' });
+        }
+      } catch (err) {
+        return reply.code(500).send({ error: 'Geocoding service error. Please try again or provide coordinates.' });
+      }
     }
 
     if (!latitude || !longitude) {
       return reply.code(400).send({ error: 'Provide latitude and longitude, or address for geocoding.' });
     }
 
-    const maxRadius = radius_km || 50; // default 50km
+    const maxRadius = radius_km || 50;
     const maxResults = limit || 5;
 
     const { rows } = await fastify.pg.query(`
       SELECT id, store_number, name, phone, street, city, state, zip,
              latitude, longitude, timezone, delivery_radius_km,
+             delivery_enabled, delivery_fee, delivery_min_order, delivery_zones,
+             hours, phone_greeting,
              ROUND((2 * 6371 * ASIN(
                SQRT(POWER(SIN(RADIANS(($1 - latitude) / 2)), 2) +
                     COS(RADIANS($1)) * COS(RADIANS(latitude)) *
@@ -62,14 +78,31 @@ module.exports = async function (fastify, opts) {
       WHERE is_active = true
         AND (2 * 6371 * ASIN(
                SQRT(POWER(SIN(RADIANS(($1 - latitude) / 2)), 2) +
-                    COS(RADIANS($1)) * COS(RADIUS(latitude)) *
+                    COS(RADIANS($1)) * COS(RADIANS(latitude)) *
                     POWER(SIN(RADIANS(($2 - longitude) / 2)), 2))
              ) <= $3)
       ORDER BY distance_km ASC
       LIMIT $4
     `, [latitude, longitude, maxRadius, maxResults]);
 
-    return { locations: rows };
+    // Add delivery info and open/closed status
+    const now = new Date();
+    const results = rows.map(loc => {
+      const dayHours = (loc.hours || []).find(h => h.day === now.getDay());
+      const currentTime = now.toTimeString().slice(0, 5);
+      const isOpen = dayHours && !dayHours.is_closed && currentTime >= (dayHours.open || '00:00') && currentTime <= (dayHours.close || '23:59');
+      const deliveryInfo = { can_deliver: false, delivery_fee: 0, delivery_min_order: 0 };
+      if (loc.delivery_enabled && loc.distance_km <= (loc.delivery_radius_km || 8)) {
+        deliveryInfo.can_deliver = true;
+        deliveryInfo.delivery_min_order = Number(loc.delivery_min_order || 0);
+        const zones = loc.delivery_zones || [];
+        const applicableZone = zones.sort((a, b) => (a.radius_km || 0) - (b.radius_km || 0)).find(z => loc.distance_km <= (z.radius_km || 0));
+        deliveryInfo.delivery_fee = applicableZone ? Number(applicableZone.fee || 0) : Number(loc.delivery_fee || 0);
+      }
+      return { ...loc, is_open: isOpen, delivery: deliveryInfo };
+    });
+
+    return { locations: results };
   });
 
   // POST /api/locations — Create a new location

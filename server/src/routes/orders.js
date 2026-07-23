@@ -140,7 +140,7 @@ module.exports = async function (fastify, opts) {
   // PATCH /api/orders/:id/status — Update order status
   fastify.patch('/:id/status', async (request, reply) => {
     const { status } = request.body;
-    const validStatuses = ['pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled'];
+    const validStatuses = ['pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled', 'out_for_delivery', 'delivered'];
 
     if (!validStatuses.includes(status)) {
       return reply.code(400).send({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
@@ -153,5 +153,39 @@ module.exports = async function (fastify, opts) {
 
     if (!rows.length) return reply.code(404).send({ error: 'Order not found' });
     return rows[0];
+  });
+
+  // GET /api/orders/kitchen/:locationId — Kitchen display view
+  fastify.get('/kitchen/:locationId', async (request, reply) => {
+    const { locationId } = request.params;
+
+    // Get orders in active kitchen stages
+    const { rows: orders } = await fastify.pg.query(
+      `SELECT o.id, o.order_number, o.customer_name, o.order_type, o.status, o.total,
+              o.subtotal, o.tax, o.discount, o.delivery_fee, o.delivery_address,
+              o.notes, o.created_at,
+              o.estimated_ready_time
+       FROM orders o
+       WHERE o.location_id = $1 AND o.status IN ('confirmed', 'preparing', 'ready', 'out_for_delivery')
+       ORDER BY
+         CASE o.status
+           WHEN 'preparing' THEN 1
+           WHEN 'confirmed' THEN 2
+           WHEN 'ready' THEN 3
+           WHEN 'out_for_delivery' THEN 4
+         END,
+         o.created_at ASC`,
+      [locationId]
+    );
+
+    for (const order of orders) {
+      const { rows: items } = await fastify.pg.query(
+        'SELECT * FROM order_items WHERE order_id = $1 ORDER BY created_at',
+        [order.id]
+      );
+      order.items = items;
+    }
+
+    return { orders };
   });
 };
