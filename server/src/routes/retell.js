@@ -45,6 +45,17 @@ const RETELL_TOOLS = [
     },
   },
   {
+    name: 'get_location_info',
+    description: 'Get detailed information about a specific location including hours of operation, phone greeting, delivery zones and fees, and current open/closed status. Use this after finding the nearest location to confirm delivery availability and estimated times.',
+    parameters: {
+      type: 'object',
+      properties: {
+        location_id: { type: 'string', description: 'The location ID to get info for' },
+      },
+      required: ['location_id'],
+    },
+  },
+  {
     name: 'check_stock',
     description: 'Check if a specific item or topping is available at a location. Use before confirming orders to avoid promising unavailable items.',
     parameters: {
@@ -83,12 +94,13 @@ const RETELL_TOOLS = [
               unit_price: { type: 'number', description: 'Price per unit for this size' },
               customizations: {
                 type: 'object',
-                description: 'Customizations: toppings, crust, sauce preferences',
+                description: 'Customizations for this item',
                 properties: {
-                  toppings: { type: 'array', items: { type: 'string' }, description: 'List of topping names' },
+                  added_toppings: { type: 'array', items: { type: 'object', properties: { topping_id: { type: 'string' }, name: { type: 'string' }, price: { type: 'number' } } }, description: 'Extra toppings added (each has a price)' },
+                  removed_toppings: { type: 'array', items: { type: 'string' }, description: 'Default toppings removed from this pizza' },
                   crust: { type: 'string', description: 'Crust type (thin, regular, stuffed)' },
                   sauce: { type: 'string', description: 'Sauce type (tomato, BBQ, white, pesto)' },
-                  extra_cheese: { type: 'boolean', description: 'Add extra cheese' },
+                  extra_cheese: { type: 'boolean', description: 'Add extra cheese (+$2)' },
                 },
               },
               special_requests: { type: 'string', description: 'Any special requests for this item' },
@@ -140,31 +152,48 @@ const RETELL_AGENT_PROMPT = `You are SliceLine, the friendly AI ordering assista
 - Be friendly but focused — customers want their pizza, not small talk
 
 ## Key Rules
-1. **Always confirm the order** — Read back every item, size, and topping before placing the order
+1. **Always confirm the order** — Read back every item, size, topping, and the total price before placing the order
 2. **Check stock availability** — If a customer asks for something, verify it's available at their location
 3. **Understand topping dependencies** — Pizzas are defined by their toppings. If a topping is out of stock:
    - Any pizza that REQUIRES that topping becomes unavailable (e.g. no pepperoni = no Classic, Works, Meat Lovers, or Diavola)
    - Pizzas where the topping is optional can still be ordered WITHOUT that topping
    - Always offer alternatives: "We're out of pepperoni, but I can make you a Veggie Supreme or Margherita"
-4. **Handle topping customizations** — Customers often add or remove toppings. Use the toppings list with prices to calculate adjustments.
-5. **Mention current specials** — If there's an active special, offer it proactively
-6. **Get the right location** — Determine which store they're ordering from early in the call
-7. **Never make up items or prices** — Use the tools to get accurate menu data
-8. **Payment is at pickup or delivery** — We don't take payment over the phone
-9. **Be concise** — Phone customers want quick service. Don't over-explain.
+4. **Handle topping customizations with pricing** — When a customer adds or removes toppings:
+   - Adding toppings costs extra (check the topping price from the menu)
+   - Removing a required topping from a pizza is allowed but does NOT reduce the price
+   - Extra cheese is $2.00
+   - Always confirm the adjusted price before placing the order
+5. **Check hours and delivery** — Use get_location_info to verify the store is open and check delivery zones/fees before taking a delivery order
+6. **Mention current specials** — If there's an active special, offer it proactively
+7. **Get the right location** — Determine which store they're ordering from early in the call
+8. **Never make up items or prices** — Use the tools to get accurate menu data
+9. **Payment is at pickup or delivery** — We don't take payment over the phone
+10. **Be concise** — Phone customers want quick service. Don't over-explain.
 
 ## Call Flow
-1. Greet the customer warmly
+1. Greet the customer warmly — use the location's phone greeting if available
 2. Ask if they've ordered before (look up by phone if yes)
-3. Determine their location (nearest store)
-4. Take their order, checking for specials
-5. If any topping is out of stock, proactively explain which pizzas are affected and suggest alternatives
-6. Read back the full order for confirmation
-7. Place the order and give them the order number and estimated time
-8. Thank them and say goodbye
+3. Determine their location (nearest store) — check if they're open and can deliver
+4. Take their order, checking for specials and stock
+5. Calculate topping additions/removals and confirm the total
+6. If any topping is out of stock, proactively explain which pizzas are affected and suggest alternatives
+7. Read back the full order with prices for confirmation
+8. Place the order and give them the order number and estimated time
+9. Thank them and say goodbye
+
+## Pricing Rules
+- Base pizza price is for the pizza with its default toppings
+- Each added topping costs extra (check the topping price from the menu data)
+- Removing toppings does NOT reduce the price
+- Extra cheese is $2.00
+- 13% HST (Ontario tax) is added to the subtotal
+- Delivery fee depends on distance (check delivery_zones from location info)
+- Free delivery on orders over $30 at some locations
 
 ## Special Situations
 - **Out of stock topping**: Check which pizzas are affected. Offer alternatives. Example: "We're out of pepperoni tonight, so The Classic and Meat Lovers aren't available, but I can offer you a Margherita, Hawaiian, or Veggie Supreme instead."
+- **Closed or closing soon**: If the store is closing within 30 minutes, let the customer know and suggest they order for pickup if delivery isn't possible.
+- **Delivery outside zone**: "I'm sorry, we can't deliver to your address, but you can place an order for pickup!"
 - **Dietary restrictions**: Offer gluten-free or vegetarian options from the menu.
 - **Large orders**: Suggest the Family Combo or Wing Night deal.
 - **Returning customers**: Welcome them back, reference their usual order if possible.
@@ -197,15 +226,25 @@ module.exports = async function (fastify, opts) {
     switch (event.type) {
       case 'call_started':
       case 'call.created': {
-        // Create a call record
+        // Create a call record and return location greeting if we can match the number
+        const callerPhone = event.caller_number || event.from || 'unknown';
         const { rows: [call] } = await fastify.pg.query(
           `INSERT INTO calls (retell_call_id, caller_phone, status, direction, started_at)
            VALUES ($1, $2, 'in_progress', 'inbound', NOW())
            ON CONFLICT (retell_call_id) DO UPDATE SET status = 'in_progress', started_at = NOW()
            RETURNING *`,
-          [event.call_id, event.caller_number || event.from || 'unknown']
+          [event.call_id, callerPhone]
         );
-        return { status: 'ok', call_id: call.id };
+
+        // Try to return the phone greeting for the called location
+        let greeting = 'Thank you for calling Demo Pizza! How can I help you today?';
+        if (event.metadata?.location_id || event.custom_fields?.location_id) {
+          const locId = event.metadata?.location_id || event.custom_fields?.location_id;
+          const { rows: [loc] } = await fastify.pg.query('SELECT phone_greeting FROM locations WHERE id = $1', [locId]);
+          if (loc?.phone_greeting) greeting = loc.phone_greeting;
+        }
+
+        return { status: 'ok', call_id: call.id, greeting };
       }
 
       case 'call_ended':
@@ -275,15 +314,49 @@ module.exports = async function (fastify, opts) {
           break;
         }
 
+        case 'get_location_info': {
+          const { rows: [loc] } = await fastify.pg.query('SELECT * FROM locations WHERE id = $1', [parameters.location_id]);
+          if (!loc) return { error: 'Location not found' };
+
+          const now = new Date();
+          const dayHours = (loc.hours || []).find(h => h.day === now.getDay());
+          const currentTime = now.toTimeString().slice(0, 5);
+          const isOpen = dayHours && !dayHours.is_closed && currentTime >= (dayHours.open || '00:00') && currentTime <= (dayHours.close || '23:59');
+
+          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          const formattedHours = (loc.hours || []).map(h => {
+            const day = dayNames[h.day] || 'Unknown';
+            if (h.is_closed) return `${day}: Closed`;
+            return `${day}: ${h.open} - ${h.close}`;
+          });
+
+          result = {
+            id: loc.id, name: loc.name, store_number: loc.store_number,
+            phone: loc.phone,
+            address: `${loc.street}, ${loc.city}, ${loc.state} ${loc.zip}`,
+            is_open: isOpen, current_time: currentTime, hours: formattedHours,
+            phone_greeting: loc.phone_greeting || 'Thank you for calling Demo Pizza! How can I help you today?',
+            delivery: {
+              enabled: loc.delivery_enabled,
+              fee: Number(loc.delivery_fee || 0),
+              min_order: Number(loc.delivery_min_order || 0),
+              zones: loc.delivery_zones || [],
+              radius_km: loc.delivery_radius_km || 8,
+            },
+          };
+          break;
+        }
+
         case 'find_nearest_location': {
           const { latitude, longitude, address } = parameters;
-          const maxRadius = 50;
           const maxResults = 3;
 
           if (latitude && longitude) {
             const { rows } = await fastify.pg.query(`
               SELECT id, store_number, name, phone, street, city, state, zip,
                      latitude, longitude, timezone, delivery_radius_km,
+                     delivery_enabled, delivery_fee, delivery_min_order, delivery_zones,
+                     hours, phone_greeting,
                      ROUND((2 * 6371 * ASIN(
                        SQRT(POWER(SIN(RADIANS(($1 - latitude) / 2)), 2) +
                             COS(RADIANS($1)) * COS(RADIANS(latitude)) *
@@ -292,7 +365,28 @@ module.exports = async function (fastify, opts) {
               FROM locations WHERE is_active = true
               ORDER BY distance_km ASC LIMIT $3
             `, [latitude, longitude, maxResults]);
-            result = { locations: rows };
+
+            // Calculate delivery fee for each location
+            const locationsWithDelivery = rows.map(loc => {
+              const deliveryInfo = { can_deliver: false, delivery_fee: 0, delivery_min_order: 0 };
+              if (loc.delivery_enabled && loc.distance_km <= (loc.delivery_radius_km || 8)) {
+                deliveryInfo.can_deliver = true;
+                deliveryInfo.delivery_min_order = Number(loc.delivery_min_order || 0);
+                // Calculate fee based on delivery zones
+                const zones = loc.delivery_zones || [];
+                const applicableZone = zones.sort((a, b) => (a.radius_km || 0) - (b.radius_km || 0))
+                  .find(z => loc.distance_km <= (z.radius_km || 0));
+                deliveryInfo.delivery_fee = applicableZone ? Number(applicableZone.fee || 0) : Number(loc.delivery_fee || 0);
+              }
+              // Check if currently open
+              const now = new Date();
+              const dayHours = (loc.hours || []).find(h => h.day === now.getDay());
+              const currentTime = now.toTimeString().slice(0, 5);
+              const isOpen = dayHours && !dayHours.is_closed && currentTime >= (dayHours.open || '00:00') && currentTime <= (dayHours.close || '23:59');
+              return { ...loc, is_open: isOpen, delivery: deliveryInfo };
+            });
+
+            result = { locations: locationsWithDelivery };
           } else {
             result = { error: 'Please provide latitude and longitude. Geocoding not yet available.', locations: [] };
           }
@@ -542,23 +636,60 @@ async function createOrder(fastify, params) {
   if (!location_id) return { error: 'location_id is required' };
   if (!items || !items.length) return { error: 'Order must have at least one item' };
 
+  // Get location for delivery fee
+  const { rows: [location] } = await fastify.pg.query(
+    'SELECT delivery_fee, delivery_min_order, delivery_zones FROM locations WHERE id = $1',
+    [location_id]
+  );
+
   let subtotal = 0;
   for (const item of items) {
-    subtotal += (item.unit_price || 0) * (item.quantity || 1);
+    let itemTotal = Number(item.unit_price || 0) * (item.quantity || 1);
+
+    // Add topping surcharges
+    const customizations = item.customizations || {};
+    const addedToppings = customizations.added_toppings || [];
+    const extraCheese = customizations.extra_cheese;
+
+    for (const t of addedToppings) {
+      itemTotal += Number(t.price || 1.50) * (item.quantity || 1);
+    }
+    if (extraCheese) {
+      itemTotal += 2.00 * (item.quantity || 1);
+    }
+
+    subtotal += itemTotal;
   }
 
+  // Calculate delivery fee
+  let deliveryFee = 0;
+  if (order_type === 'delivery' && location) {
+    if (location.delivery_zones && Array.isArray(location.delivery_zones)) {
+      // Use base delivery fee for now (distance-based calculation would need customer coords)
+      deliveryFee = Number(location.delivery_fee || 0);
+    } else {
+      deliveryFee = Number(location.delivery_fee || 0);
+    }
+  }
+
+  // Apply discount/special
   let discount = 0;
   if (special_id) {
     const { rows: [special] } = await fastify.pg.query('SELECT * FROM specials WHERE id = $1', [special_id]);
     if (special) {
       if (special.discount_type === 'percentage') discount = Math.round(subtotal * special.discount_value) / 100;
       else if (special.discount_type === 'fixed') discount = special.discount_value;
+      else if (special.discount_type === 'buy_one_get_one' && items.length >= 2) {
+        // BOGO: cheapest item is free
+        const prices = items.map(i => Number(i.unit_price || 0));
+        discount = Math.min(...prices);
+      }
     }
   }
 
-  const taxRate = 0.13;
+  const taxRate = 0.13; // Ontario HST
   const tax = Math.round((subtotal - discount) * taxRate * 100) / 100;
-  const total = Math.round((subtotal - discount + tax) * 100) / 100;
+  const total = Math.round((subtotal - discount + tax + deliveryFee) * 100) / 100;
   const orderNumber = `SL-${Math.floor(100000 + Math.random() * 900000)}`;
 
   // Look up or create customer
@@ -587,12 +718,25 @@ async function createOrder(fastify, params) {
   );
 
   for (const item of items) {
+    const customizations = item.customizations || {};
+    const addedToppings = customizations.added_toppings || [];
+    const extraCheese = customizations.extra_cheese;
+
+    // Calculate item total including toppings
+    let itemUnitPrice = Number(item.unit_price || 0);
+    for (const t of addedToppings) {
+      itemUnitPrice += Number(t.price || 1.50);
+    }
+    if (extraCheese) itemUnitPrice += 2.00;
+
+    const itemTotal = itemUnitPrice * (item.quantity || 1);
+
     await fastify.pg.query(
       `INSERT INTO order_items (order_id, menu_item_id, name, size, quantity, unit_price, total_price, customizations, special_requests)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [order.id, item.menu_item_id || null, item.name, item.size || null, item.quantity || 1,
-       item.unit_price, (item.unit_price || 0) * (item.quantity || 1),
-       JSON.stringify(item.customizations || {}), item.special_requests || null]
+       itemUnitPrice, itemTotal,
+       JSON.stringify(customizations), item.special_requests || null]
     );
   }
 
@@ -619,8 +763,12 @@ async function createOrder(fastify, params) {
     order_id: fullOrder.id,
     order_number: fullOrder.order_number,
     status: fullOrder.status,
-    total: fullOrder.total,
+    subtotal: Number(fullOrder.subtotal),
+    tax: Number(fullOrder.tax),
+    discount: Number(fullOrder.discount || 0),
+    delivery_fee: deliveryFee,
+    total: Number(fullOrder.total),
     estimated_time: order_type === 'delivery' ? '35-45 minutes' : '20-25 minutes',
-    message: `Order confirmed! Your order number is ${fullOrder.order_number}. Estimated ${order_type === 'delivery' ? 'delivery' : 'pickup'} time is ${order_type === 'delivery' ? '35-45' : '20-25'} minutes.`,
+    message: `Order confirmed! Your order number is ${fullOrder.order_number}. Subtotal: $${Number(fullOrder.subtotal).toFixed(2)}${discount > 0 ? `, Discount: -$${Number(discount).toFixed(2)}` : ''}, Tax (13% HST): $${Number(fullOrder.tax).toFixed(2)}${deliveryFee > 0 ? `, Delivery fee: $${deliveryFee.toFixed(2)}` : ''}, Total: $${Number(fullOrder.total).toFixed(2)}. Estimated ${order_type === 'delivery' ? 'delivery' : 'pickup'} time is ${order_type === 'delivery' ? '35-45' : '20-25'} minutes.`,
   };
 }

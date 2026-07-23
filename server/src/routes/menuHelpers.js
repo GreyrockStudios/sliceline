@@ -109,6 +109,21 @@ async function getLocationMenu(fastify, locationId) {
     // Skip discontinued items
     if (stockInfo && stockInfo.stock_status === 'discontinued') return null;
 
+    // Check time availability
+    if (item.available_times && Array.isArray(item.available_times) && item.available_times.length > 0) {
+      const now = new Date();
+      const dayOfWeek = now.getDay();
+      const currentTime = now.toTimeString().slice(0, 5);
+      const isAvailableNow = item.available_times.some(slot => {
+        if (slot.day !== undefined && slot.day !== dayOfWeek) return false;
+        if (slot.start && slot.end) return currentTime >= slot.start && currentTime <= slot.end;
+        return true;
+      });
+      if (!isAvailableNow) {
+        return { ...item, is_available: false, unavailable_reason: 'Not available at this time', default_toppings };
+      }
+    }
+
     // Item-level out of stock
     if (stockInfo && stockInfo.stock_status === 'out_of_stock') {
       return {
