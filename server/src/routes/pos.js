@@ -85,7 +85,7 @@ module.exports = async function (fastify, opts) {
 
   // ─── POST /api/pos/:adapter/submit ──────────────────────────────────
 
-  fastify.post('/submit', async (request, reply) => {
+  fastify.post('/:adapter/submit', async (request, reply) => {
     const { order_id } = request.body || {};
 
     if (!order_id) {
@@ -148,7 +148,7 @@ module.exports = async function (fastify, opts) {
 
   // ─── GET /api/pos/:adapter/status/:posOrderId ──────────────────────
 
-  fastify.get('/status/:posOrderId', async (request, reply) => {
+  fastify.get('/:adapter/status/:posOrderId', async (request, reply) => {
     const { posOrderId } = request.params;
 
     try {
@@ -165,7 +165,7 @@ module.exports = async function (fastify, opts) {
 
   // ─── POST /api/pos/:adapter/sync-menu/:locationId ──────────────────
 
-  fastify.post('/sync-menu/:locationId', async (request, reply) => {
+  fastify.post('/:adapter/sync-menu/:locationId', async (request, reply) => {
     const { locationId } = request.params;
 
     try {
@@ -198,7 +198,7 @@ module.exports = async function (fastify, opts) {
 
   // ─── GET /api/pos/:adapter/availability/:locationId ─────────────────
 
-  fastify.get('/availability/:locationId', async (request, reply) => {
+  fastify.get('/:adapter/availability/:locationId', async (request, reply) => {
     const { locationId } = request.params;
 
     try {
@@ -215,7 +215,7 @@ module.exports = async function (fastify, opts) {
 
   // ─── POST /api/pos/:adapter/validate ────────────────────────────────
 
-  fastify.post('/validate', async (request, reply) => {
+  fastify.post('/:adapter/validate', async (request, reply) => {
     const { order_id, order } = request.body || {};
 
     // Either pass an order_id to load from DB, or pass the order directly
