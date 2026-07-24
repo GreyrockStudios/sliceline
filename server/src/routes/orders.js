@@ -1,19 +1,17 @@
-const { v4: uuidv4 } = require('uuid');
-
-// Generate a human-readable order number: SL-XXXXXX
-function generateOrderNumber() {
-  const num = Math.floor(100000 + Math.random() * 900000);
-  return `SL-${num}`;
-}
-
 module.exports = async function (fastify, opts) {
-  // GET /api/orders — List orders with filters
+  // GET /api/orders — List orders with filters (tenant-filtered)
   fastify.get('/', async (request, reply) => {
     const { location_id, status, date, limit = 50, offset = 0 } = request.query;
 
     const conditions = [];
     const params = [];
     let paramIdx = 1;
+
+    // Tenant isolation: filter by franchise_id if authenticated
+    if (request.franchise_id) {
+      conditions.push(`l.franchise_id = $${paramIdx++}`);
+      params.push(request.franchise_id);
+    }
 
     if (location_id) { conditions.push(`o.location_id = $${paramIdx++}`); params.push(location_id); }
     if (status) { conditions.push(`o.status = $${paramIdx++}`); params.push(status); }
@@ -38,12 +36,22 @@ module.exports = async function (fastify, opts) {
     return { orders: rows };
   });
 
-  // GET /api/orders/:id — Get order details
+  // GET /api/orders/:id — Get order details (tenant-filtered)
   fastify.get('/:id', async (request, reply) => {
+    const conditions = ['o.id = $1'];
+    const params = [request.params.id];
+    let paramIdx = 2;
+
+    if (request.franchise_id) {
+      conditions.push(`l.franchise_id = $${paramIdx++}`);
+      params.push(request.franchise_id);
+    }
+
     const { rows: orders } = await fastify.pg.query(
       `SELECT o.*, l.name AS location_name, l.store_number
        FROM orders o JOIN locations l ON l.id = o.location_id
-       WHERE o.id = $1`, [request.params.id]
+       WHERE ${conditions.join(' AND ')}`,
+      params
     );
     if (!orders.length) return reply.code(404).send({ error: 'Order not found' });
 
@@ -56,7 +64,7 @@ module.exports = async function (fastify, opts) {
     return order;
   });
 
-  // POST /api/orders — Create a new order
+  // POST /api/orders — Create a new order (tenant-scoped)
   fastify.post('/', async (request, reply) => {
     const {
       location_id, customer_id, customer_name, customer_phone,
@@ -66,6 +74,22 @@ module.exports = async function (fastify, opts) {
 
     if (!location_id) return reply.code(400).send({ error: 'location_id is required' });
     if (!items || !items.length) return reply.code(400).send({ error: 'Order must have at least one item' });
+
+    // Verify the location belongs to this tenant (if authenticated)
+    if (request.franchise_id) {
+      const { rows: locCheck } = await fastify.pg.query(
+        'SELECT id FROM locations WHERE id = $1 AND franchise_id = $2',
+        [location_id, request.franchise_id]
+      );
+      if (!locCheck.length) {
+        return reply.code(403).send({ error: 'Location does not belong to your franchise' });
+      }
+    }
+
+    // Verify write permission
+    if (request.api_key_permissions && !request.api_key_permissions.includes('write') && !request.api_key_permissions.includes('admin')) {
+      return reply.code(403).send({ error: 'Insufficient permissions to create orders' });
+    }
 
     // Calculate totals
     let subtotal = 0;
@@ -132,60 +156,14 @@ module.exports = async function (fastify, opts) {
     // Reload order with items
     const { rows: [fullOrder] } = await fastify.pg.query('SELECT * FROM orders WHERE id = $1', [order.id]);
     const { rows: orderItemsResult } = await fastify.pg.query('SELECT * FROM order_items WHERE order_id = $1', [order.id]);
+
     fullOrder.items = orderItemsResult;
-
-    return reply.code(201).send(fullOrder);
-  });
-
-  // PATCH /api/orders/:id/status — Update order status
-  fastify.patch('/:id/status', async (request, reply) => {
-    const { status } = request.body;
-    const validStatuses = ['pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled', 'out_for_delivery', 'delivered'];
-
-    if (!validStatuses.includes(status)) {
-      return reply.code(400).send({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
-    }
-
-    const { rows } = await fastify.pg.query(
-      'UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
-      [status, request.params.id]
-    );
-
-    if (!rows.length) return reply.code(404).send({ error: 'Order not found' });
-    return rows[0];
-  });
-
-  // GET /api/orders/kitchen/:locationId — Kitchen display view
-  fastify.get('/kitchen/:locationId', async (request, reply) => {
-    const { locationId } = request.params;
-
-    // Get orders in active kitchen stages
-    const { rows: orders } = await fastify.pg.query(
-      `SELECT o.id, o.order_number, o.customer_name, o.order_type, o.status, o.total,
-              o.subtotal, o.tax, o.discount, o.delivery_fee, o.delivery_address,
-              o.notes, o.created_at,
-              o.estimated_ready_time
-       FROM orders o
-       WHERE o.location_id = $1 AND o.status IN ('confirmed', 'preparing', 'ready', 'out_for_delivery')
-       ORDER BY
-         CASE o.status
-           WHEN 'preparing' THEN 1
-           WHEN 'confirmed' THEN 2
-           WHEN 'ready' THEN 3
-           WHEN 'out_for_delivery' THEN 4
-         END,
-         o.created_at ASC`,
-      [locationId]
-    );
-
-    for (const order of orders) {
-      const { rows: items } = await fastify.pg.query(
-        'SELECT * FROM order_items WHERE order_id = $1 ORDER BY created_at',
-        [order.id]
-      );
-      order.items = items;
-    }
-
-    return { orders };
+    return fullOrder;
   });
 };
+
+// Generate a human-readable order number: SL-XXXXXX
+function generateOrderNumber() {
+  const num = Math.floor(100000 + Math.random() * 900000);
+  return `SL-${num}`;
+}

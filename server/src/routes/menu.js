@@ -2,8 +2,17 @@ const { v4: uuidv4 } = require('uuid');
 const { getLocationMenu } = require('./menuHelpers');
 
 module.exports = async function (fastify, opts) {
-  // GET /api/menu/:locationId — Get full menu for a location (with overrides, stock, topping deps)
+  // GET /api/menu/:locationId — Get full menu for a location (public, but tenant-checked)
   fastify.get('/:locationId', async (request, reply) => {
+    // Verify location belongs to tenant if authenticated
+    if (request.franchise_id) {
+      const { rows: locCheck } = await fastify.pg.query(
+        'SELECT id FROM locations WHERE id = $1 AND franchise_id = $2',
+        [request.params.locationId, request.franchise_id]
+      );
+      if (!locCheck.length) return reply.code(404).send({ error: 'Location not found' });
+    }
+
     const menu = await getLocationMenu(fastify, request.params.locationId);
     if (!menu) return reply.code(404).send({ error: 'Location not found' });
     return menu;
@@ -11,6 +20,14 @@ module.exports = async function (fastify, opts) {
 
   // GET /api/menu/:locationId/specials — Get current specials for a location
   fastify.get('/:locationId/specials', async (request, reply) => {
+    if (request.franchise_id) {
+      const { rows: locCheck } = await fastify.pg.query(
+        'SELECT id FROM locations WHERE id = $1 AND franchise_id = $2',
+        [request.params.locationId, request.franchise_id]
+      );
+      if (!locCheck.length) return reply.code(404).send({ error: 'Location not found' });
+    }
+
     const menu = await getLocationMenu(fastify, request.params.locationId);
     if (!menu) return reply.code(404).send({ error: 'Location not found' });
 
@@ -29,9 +46,19 @@ module.exports = async function (fastify, opts) {
     return { specials: activeSpecials };
   });
 
-  // POST /api/menu/items — Add a menu item
+  // POST /api/menu/items — Add a menu item (requires write permission)
   fastify.post('/items', async (request, reply) => {
+    if (request.api_key_permissions && !request.api_key_permissions.includes('write') && !request.api_key_permissions.includes('admin')) {
+      return reply.code(403).send({ error: 'Insufficient permissions' });
+    }
+
     const { franchise_id, category_id, name, description, slug, base_price, sizes, display_order } = request.body;
+
+    // Verify franchise belongs to tenant
+    if (request.franchise_id && franchise_id !== request.franchise_id) {
+      return reply.code(403).send({ error: 'Cannot create items for another franchise' });
+    }
+
     const { rows } = await fastify.pg.query(
       `INSERT INTO menu_items (franchise_id, category_id, name, description, slug, base_price, sizes, display_order)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
@@ -42,6 +69,19 @@ module.exports = async function (fastify, opts) {
 
   // PUT /api/menu/items/:id — Update a menu item
   fastify.put('/items/:id', async (request, reply) => {
+    if (request.api_key_permissions && !request.api_key_permissions.includes('write') && !request.api_key_permissions.includes('admin')) {
+      return reply.code(403).send({ error: 'Insufficient permissions' });
+    }
+
+    // Verify item belongs to tenant
+    if (request.franchise_id) {
+      const { rows: itemCheck } = await fastify.pg.query(
+        'SELECT id FROM menu_items WHERE id = $1 AND franchise_id = $2',
+        [request.params.id, request.franchise_id]
+      );
+      if (!itemCheck.length) return reply.code(404).send({ error: 'Menu item not found' });
+    }
+
     const fields = [];
     const values = [];
     let paramIdx = 1;
@@ -64,8 +104,20 @@ module.exports = async function (fastify, opts) {
     return rows[0];
   });
 
-  // DELETE /api/menu/items/:id — Remove a menu item (soft delete)
+  // DELETE /api/menu/items/:id — Soft delete
   fastify.delete('/items/:id', async (request, reply) => {
+    if (request.api_key_permissions && !request.api_key_permissions.includes('admin')) {
+      return reply.code(403).send({ error: 'Admin permission required' });
+    }
+
+    if (request.franchise_id) {
+      const { rows: itemCheck } = await fastify.pg.query(
+        'SELECT id FROM menu_items WHERE id = $1 AND franchise_id = $2',
+        [request.params.id, request.franchise_id]
+      );
+      if (!itemCheck.length) return reply.code(404).send({ error: 'Menu item not found' });
+    }
+
     const { rows } = await fastify.pg.query(
       'UPDATE menu_items SET is_available = false, updated_at = NOW() WHERE id = $1 RETURNING *',
       [request.params.id]
@@ -74,8 +126,21 @@ module.exports = async function (fastify, opts) {
     return { message: 'Menu item deactivated', id: rows[0].id };
   });
 
-  // POST /api/menu/:locationId/stock — Update stock for a location
+  // POST /api/menu/:locationId/stock — Update stock for a location (requires write)
   fastify.post('/:locationId/stock', async (request, reply) => {
+    if (request.api_key_permissions && !request.api_key_permissions.includes('write') && !request.api_key_permissions.includes('admin')) {
+      return reply.code(403).send({ error: 'Insufficient permissions' });
+    }
+
+    // Verify location belongs to tenant
+    if (request.franchise_id) {
+      const { rows: locCheck } = await fastify.pg.query(
+        'SELECT id FROM locations WHERE id = $1 AND franchise_id = $2',
+        [request.params.locationId, request.franchise_id]
+      );
+      if (!locCheck.length) return reply.code(404).send({ error: 'Location not found' });
+    }
+
     const { items } = request.body;
     const locationId = request.params.locationId;
 
@@ -98,7 +163,16 @@ module.exports = async function (fastify, opts) {
   // GET /api/menu/:locationId/topping-impact — Which pizzas are affected by a topping being out of stock?
   fastify.get('/:locationId/topping-impact', async (request, reply) => {
     const locationId = request.params.locationId;
-    
+
+    // Verify location belongs to tenant
+    if (request.franchise_id) {
+      const { rows: locCheck } = await fastify.pg.query(
+        'SELECT id FROM locations WHERE id = $1 AND franchise_id = $2',
+        [locationId, request.franchise_id]
+      );
+      if (!locCheck.length) return reply.code(404).send({ error: 'Location not found' });
+    }
+
     // Get all out-of-stock toppings at this location
     const { rows: oosToppings } = await fastify.pg.query(
       `SELECT ls.*, t.name AS topping_name

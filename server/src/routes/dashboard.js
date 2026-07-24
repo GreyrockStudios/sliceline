@@ -1,10 +1,17 @@
 module.exports = async function (fastify, opts) {
-  // GET /api/dashboard/:locationId — Live dashboard data for a store
+  // GET /api/dashboard/:locationId — Live dashboard data for a store (tenant-filtered)
   fastify.get('/:locationId', async (request, reply) => {
     const { locationId } = request.params;
 
-    // Verify location exists
-    const { rows: [location] } = await fastify.pg.query('SELECT * FROM locations WHERE id = $1', [locationId]);
+    // Verify location exists and belongs to tenant
+    const locQuery = request.franchise_id
+      ? 'SELECT * FROM locations WHERE id = $1 AND franchise_id = $2'
+      : 'SELECT * FROM locations WHERE id = $1';
+    const locParams = request.franchise_id
+      ? [locationId, request.franchise_id]
+      : [locationId];
+
+    const { rows: [location] } = await fastify.pg.query(locQuery, locParams);
     if (!location) return reply.code(404).send({ error: 'Location not found' });
 
     // Active orders
@@ -124,6 +131,15 @@ module.exports = async function (fastify, opts) {
   fastify.get('/:locationId/stats', async (request, reply) => {
     const { locationId } = request.params;
 
+    // Verify location belongs to tenant
+    if (request.franchise_id) {
+      const { rows: locCheck } = await fastify.pg.query(
+        'SELECT id FROM locations WHERE id = $1 AND franchise_id = $2',
+        [locationId, request.franchise_id]
+      );
+      if (!locCheck.length) return reply.code(404).send({ error: 'Location not found' });
+    }
+
     const { rows: [orderStats] } = await fastify.pg.query(
       `SELECT
          COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed', 'preparing', 'ready')) AS active_orders,
@@ -149,6 +165,18 @@ module.exports = async function (fastify, opts) {
 
   // GET /api/dashboard/:locationId/stream — SSE for real-time updates
   fastify.get('/:locationId/stream', async (request, reply) => {
+    // Verify location belongs to tenant
+    if (request.franchise_id) {
+      const { rows: locCheck } = await fastify.pg.query(
+        'SELECT id FROM locations WHERE id = $1 AND franchise_id = $2',
+        [request.params.locationId, request.franchise_id]
+      );
+      if (!locCheck.length) {
+        reply.code(404).send({ error: 'Location not found' });
+        return;
+      }
+    }
+
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',

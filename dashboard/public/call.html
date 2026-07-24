@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Demo Pizza - Call SliceLine</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+
+    .container {
+      max-width: 480px;
+      width: 90%;
+      text-align: center;
+      padding: 40px 20px;
+    }
+
+    .logo {
+      font-size: 48px;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      color: #ff6b35;
+    }
+
+    h2 {
+      font-size: 16px;
+      font-weight: 400;
+      color: #a0a0b0;
+      margin-bottom: 32px;
+    }
+
+    .call-button {
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      border: none;
+      background: linear-gradient(135deg, #ff6b35, #ff4444);
+      color: white;
+      font-size: 48px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 8px 32px rgba(255, 107, 53, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      position: relative;
+    }
+
+    .call-button:hover {
+      transform: scale(1.05);
+      box-shadow: 0 12px 40px rgba(255, 107, 53, 0.6);
+    }
+
+    .call-button:active {
+      transform: scale(0.98);
+    }
+
+    .call-button.calling {
+      background: linear-gradient(135deg, #ff4444, #cc0000);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 8px 32px rgba(255, 68, 68, 0.4); }
+      50% { box-shadow: 0 8px 48px rgba(255, 68, 68, 0.8); }
+    }
+
+    .status {
+      font-size: 18px;
+      font-weight: 500;
+      margin-bottom: 8px;
+      min-height: 28px;
+    }
+
+    .status.connected { color: #4caf50; }
+    .status.disconnected { color: #a0a0b0; }
+    .status.error { color: #ff4444; }
+
+    .subtitle {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 24px;
+    }
+
+    .transcript {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 16px;
+      max-height: 300px;
+      overflow-y: auto;
+      text-align: left;
+      margin-top: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .transcript:empty {
+      display: none;
+    }
+
+    .message {
+      margin-bottom: 12px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .message.user {
+      background: rgba(59, 130, 246, 0.2);
+      margin-left: 20%;
+    }
+
+    .message.assistant {
+      background: rgba(255, 107, 53, 0.2);
+      margin-right: 20%;
+    }
+
+    .message .role {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 2px;
+    }
+
+    .info-box {
+      margin-top: 32px;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .info-box h3 {
+      font-size: 14px;
+      color: #ff6b35;
+      margin-bottom: 8px;
+    }
+
+    .info-box p {
+      font-size: 13px;
+      color: #a0a0b0;
+      line-height: 1.5;
+    }
+
+    .mute-button {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 0 4px;
+      transition: all 0.2s;
+    }
+
+    .mute-button:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .mute-button.muted {
+      background: rgba(255, 68, 68, 0.3);
+      border-color: rgba(255, 68, 68, 0.5);
+    }
+
+    .controls {
+      display: none;
+      justify-content: center;
+      margin-top: 16px;
+    }
+
+    .controls.visible {
+      display: flex;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">🍕</div>
+    <h1>Demo Pizza</h1>
+    <h2>AI-Powered Phone Ordering</h2>
+    
+    <button class="call-button" id="callButton" onclick="toggleCall()">
+      📞
+    </button>
+    
+    <div class="status disconnected" id="status">Tap to order</div>
+    <div class="subtitle" id="subtitle">Voice-powered ordering with SliceLine AI</div>
+    
+    <div class="controls" id="controls">
+      <button class="mute-button" id="muteButton" onclick="toggleMute()">🔇 Mute</button>
+    </div>
+
+    <div class="transcript" id="transcript"></div>
+
+    <div class="info-box">
+      <h3>How it works</h3>
+      <p>This is a voice AI demo. Click the phone button to start a conversation with our AI ordering assistant. You can ask about the menu, check prices, find the nearest location, and place an order — all by voice.</p>
+    </div>
+  </div>
+
+  <script>
+    const ASSISTANT_ID = 'fa3d2a14-f45c-4156-b3be-f97f3cddcef4';
+    // Public API key needed - replace with yours from Vapi dashboard
+    const VAPI_PUBLIC_KEY = 'VAPI_PUBLIC_KEY_PLACEHOLDER';
+    
+    let vapiInstance = null;
+    let isMuted = false;
+
+    function updateStatus(text, className) {
+      const status = document.getElementById('status');
+      status.textContent = text;
+      status.className = 'status ' + className;
+    }
+
+    function addTranscriptMessage(role, text) {
+      const transcript = document.getElementById('transcript');
+      const msg = document.createElement('div');
+      msg.className = 'message ' + role;
+      msg.innerHTML = `<div class="role">${role === 'user' ? 'You' : 'SliceLine'}</div>${text}`;
+      transcript.appendChild(msg);
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    function toggleCall() {
+      if (vapiInstance) {
+        vapiInstance.stop();
+        return;
+      }
+
+      if (VAPI_PUBLIC_KEY === 'VAPI_PUBLIC_KEY_PLACEHOLDER') {
+        updateStatus('Setup required', 'error');
+        document.getElementById('subtitle').textContent = 'Need Vapi public API key — see dashboard.vapi.ai → Settings → API Keys';
+        return;
+      }
+
+      const button = document.getElementById('callButton');
+      button.classList.add('calling');
+      button.textContent = '📞';
+      updateStatus('Connecting...', 'disconnected');
+
+      vapiInstance = window.vapiSDK.run({
+        apiKey: VAPI_PUBLIC_KEY,
+        assistant: ASSISTANT_ID,
+        config: {
+          // No phone number needed for web calls
+        }
+      });
+
+      vapiInstance.on('call-start', () => {
+        updateStatus('Connected', 'connected');
+        document.getElementById('subtitle').textContent = 'Speak naturally — the AI will take your order';
+        document.getElementById('controls').classList.add('visible');
+      });
+
+      vapiInstance.on('call-end', () => {
+        updateStatus('Call ended', 'disconnected');
+        document.getElementById('subtitle').textContent = 'Tap to order again';
+        document.getElementById('controls').classList.remove('visible');
+        const button = document.getElementById('callButton');
+        button.classList.remove('calling');
+        button.textContent = '📞';
+        vapiInstance = null;
+        isMuted = false;
+        document.getElementById('muteButton').textContent = '🔇 Mute';
+        document.getElementById('muteButton').classList.remove('muted');
+      });
+
+      vapiInstance.on('message', (message) => {
+        if (message.type === 'transcript') {
+          const role = message.role === 'user' ? 'user' : 'assistant';
+          addTranscriptMessage(role, message.transcript);
+        }
+      });
+
+      vapiInstance.on('error', (error) => {
+        console.error('Vapi error:', error);
+        updateStatus('Error: ' + (error.message || 'Connection failed'), 'error');
+        const button = document.getElementById('callButton');
+        button.classList.remove('calling');
+        button.textContent = '📞';
+        vapiInstance = null;
+      });
+    }
+
+    function toggleMute() {
+      if (!vapiInstance) return;
+      isMuted = !isMuted;
+      vapiInstance.setMuted(isMuted);
+      const btn = document.getElementById('muteButton');
+      btn.textContent = isMuted ? '🔇 Unmute' : '🔇 Mute';
+      btn.classList.toggle('muted', isMuted);
+    }
+  </script>
+
+  <script>
+    // Load Vapi SDK
+    (function(d, t) {
+      var g = d.createElement(t), s = d.getElementsByTagName(t)[0];
+      g.src = "https://cdn.jsdelivr.net/gh/VapiAI/html-script-tag@latest/dist/assets/index.js";
+      g.defer = true;
+      g.async = true;
+      s.parentNode.insertBefore(g, s);
+    })(document, "script");
+  </script>
+</body>
+</html>

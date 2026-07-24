@@ -1,5 +1,5 @@
 -- SliceLine Database Schema
--- Supports franchise routing, per-location menus, order management, and call transcripts
+-- Supports franchise routing, per-location menus, order management, call transcripts, and POS integrations
 
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -407,3 +407,24 @@ LEFT JOIN menu_items mi ON mi.id = ls.item_id AND ls.item_type = 'menu_item'
 LEFT JOIN toppings t ON t.id = ls.item_id AND ls.item_type = 'topping'
 WHERE ls.stock_status != 'in_stock'
 ORDER BY ls.updated_at DESC;
+
+-- ============================================
+-- POS INTEGRATION CONFIG
+-- ============================================
+
+-- Per-franchise POS adapter configuration
+-- Stores adapter-specific credentials and settings as JSONB
+CREATE TABLE IF NOT EXISTS pos_configs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  franchise_id UUID REFERENCES franchises(id) ON DELETE CASCADE NOT NULL,
+  adapter VARCHAR(50) NOT NULL,  -- 'toast', 'square', 'clover'
+  config JSONB NOT NULL DEFAULT '{}',  -- adapter-specific config (encrypted secrets stored here)
+  is_active BOOLEAN DEFAULT true,
+  last_sync_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(franchise_id, adapter)
+);
+
+CREATE INDEX idx_pos_configs_franchise ON pos_configs(franchise_id);
+CREATE INDEX idx_pos_configs_adapter ON pos_configs(adapter);

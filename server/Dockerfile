@@ -9,4 +9,5 @@ COPY . .
 
 EXPOSE 3000
 
-CMD ["node", "src/index.js"]
+# Run migrations then start server
+CMD ["sh", "-c", "node src/db/migrate.js && node src/index.js"]

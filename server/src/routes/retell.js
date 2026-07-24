@@ -298,8 +298,29 @@ module.exports = async function (fastify, opts) {
   });
 
   // POST /api/retell/tool-call — Handle Retell agent function calls
+  // Supports two formats:
+  //   1. WebSocket/Custom LLM: { tool_name, parameters, call_id }
+  //   2. Retell Custom Function: { name, call, args } (or just args if "Payload: args only")
   fastify.post('/tool-call', async (request, reply) => {
-    const { tool_name, parameters, call_id } = request.body;
+    const body = request.body;
+    // Normalize Retell custom function format to our internal format
+    let tool_name, parameters, call_id;
+    if (body.name && body.args) {
+      // Retell Custom Function format: { name, call, args }
+      tool_name = body.name;
+      parameters = body.args;
+      call_id = body.call?.call_id;
+    } else if (body.tool_name) {
+      // Our internal format: { tool_name, parameters, call_id }
+      tool_name = body.tool_name;
+      parameters = body.parameters || {};
+      call_id = body.call_id;
+    } else {
+      // Possibly "Payload: args only" format — no name wrapper, need to infer
+      // This shouldn't happen if Retell is configured with the function name properly
+      fastify.log.error({ body }, 'Unrecognized tool call format');
+      return reply.code(400).send({ error: 'Unrecognized request format. Expected { name, args } or { tool_name, parameters }.' });
+    }
 
     fastify.log.info({ tool: tool_name, callId: call_id }, 'Retell tool call');
 
@@ -348,8 +369,23 @@ module.exports = async function (fastify, opts) {
         }
 
         case 'find_nearest_location': {
-          const { latitude, longitude, address } = parameters;
+          let { latitude, longitude, address } = parameters;
           const maxResults = 3;
+
+          // If no coordinates but address provided, geocode it
+          if ((!latitude || !longitude) && address) {
+            try {
+              const geoUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
+              const geoRes = await fetch(geoUrl, { headers: { 'User-Agent': 'SliceLine/1.0' } });
+              const geoData = await geoRes.json();
+              if (geoData.length > 0) {
+                latitude = parseFloat(geoData[0].lat);
+                longitude = parseFloat(geoData[0].lon);
+              }
+            } catch (geoErr) {
+              fastify.log.warn({ err: geoErr }, 'Geocoding failed');
+            }
+          }
 
           if (latitude && longitude) {
             const { rows } = await fastify.pg.query(`
@@ -388,7 +424,7 @@ module.exports = async function (fastify, opts) {
 
             result = { locations: locationsWithDelivery };
           } else {
-            result = { error: 'Please provide latitude and longitude. Geocoding not yet available.', locations: [] };
+            result = { error: 'Could not determine your location. Please provide your address or coordinates.', locations: [] };
           }
           break;
         }
