@@ -499,6 +499,302 @@ async function executeTool(fastify, tool_name, parameters) {
       }
     }
 
+    case 'get_customer_orders': {
+      const { customer_id, limit = 5, location_id } = parameters;
+      if (!customer_id) return { error: 'customer_id is required' };
+
+      const { rows: [customer] } = await fastify.pg.query(
+        'SELECT id, name, phone FROM customers WHERE id = $1', [customer_id]
+      );
+      if (!customer) return { error: 'Customer not found' };
+
+      const conditions = ['o.customer_id = $1'];
+      const params = [customer_id];
+      let idx = 2;
+
+      if (location_id) {
+        conditions.push(`o.location_id = $${idx++}`);
+        params.push(location_id);
+      }
+      params.push(limit);
+
+      const { rows: orders } = await fastify.pg.query(
+        `SELECT o.id, o.order_number, o.location_id, o.order_type, o.total,
+                o.delivery_address, o.status, o.created_at,
+                l.name AS location_name
+         FROM orders o JOIN locations l ON l.id = o.location_id
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY o.created_at DESC LIMIT $${idx}`,
+        params
+      );
+
+      for (const order of orders) {
+        const { rows: items } = await fastify.pg.query(
+          `SELECT menu_item_id, name, size, quantity, unit_price, total_price, customizations, special_requests
+           FROM order_items WHERE order_id = $1 ORDER BY created_at`,
+          [order.id]
+        );
+        order.items = items;
+        order.item_summary = items.map(i => `${i.quantity}x ${i.size ? i.size + ' ' : ''}${i.name}`).join(', ');
+      }
+
+      return { customer: { id: customer.id, name: customer.name, phone: customer.phone }, orders };
+    }
+
+    case 'reorder': {
+      const { customer_id, order_id, location_id, modifications } = parameters;
+      if (!customer_id) return { error: 'customer_id is required' };
+      if (!order_id) return { error: 'order_id is required (the order to reorder from)' };
+
+      // Load customer
+      const { rows: [customer] } = await fastify.pg.query(
+        'SELECT id, phone, name, default_location_id FROM customers WHERE id = $1', [customer_id]
+      );
+      if (!customer) return { error: 'Customer not found' };
+
+      // Load original order
+      const { rows: [originalOrder] } = await fastify.pg.query(
+        `SELECT o.*, l.name AS location_name FROM orders o
+         JOIN locations l ON l.id = o.location_id WHERE o.id = $1 AND o.customer_id = $2`,
+        [order_id, customer_id]
+      );
+      if (!originalOrder) return { error: 'Original order not found' };
+
+      // Load original items
+      const { rows: originalItems } = await fastify.pg.query(
+        'SELECT * FROM order_items WHERE order_id = $1 ORDER BY created_at', [originalOrder.id]
+      );
+
+      const targetLocationId = location_id || originalOrder.location_id;
+      const warnings = [];
+      const validItems = [];
+
+      for (const item of originalItems) {
+        if (item.menu_item_id) {
+          const { rows: [menuItem] } = await fastify.pg.query(
+            'SELECT is_available, name, base_price, sizes FROM menu_items WHERE id = $1', [item.menu_item_id]
+          );
+          if (!menuItem || !menuItem.is_available) {
+            warnings.push(`${item.name} is no longer available`);
+            continue;
+          }
+
+          // Check required toppings stock
+          const { rows: oosToppings } = await fastify.pg.query(
+            `SELECT t.name FROM menu_item_toppings mit
+             JOIN toppings t ON t.id = mit.topping_id
+             LEFT JOIN location_stock ls ON ls.item_id = t.id AND ls.item_type = 'topping' AND ls.location_id = $1
+             WHERE mit.menu_item_id = $2 AND mit.is_required = true AND ls.stock_status = 'out_of_stock'`,
+            [targetLocationId, item.menu_item_id]
+          );
+          if (oosToppings.length > 0) {
+            warnings.push(`${item.name} is unavailable (out of stock: ${oosToppings.map(t => t.name).join(', ')})`);
+            continue;
+          }
+
+          // Recalculate price
+          let unitPrice = Number(item.unit_price);
+          const { rows: [override] } = await fastify.pg.query(
+            'SELECT price_override, sizes_override FROM location_menu_overrides WHERE location_id = $1 AND menu_item_id = $2',
+            [targetLocationId, item.menu_item_id]
+          );
+          if (item.size && menuItem.sizes) {
+            const sizes = override?.sizes_override || menuItem.sizes;
+            const sizeMatch = sizes.find(s => s.name === item.size);
+            if (sizeMatch) unitPrice = Number(sizeMatch.price);
+          }
+
+          const customizations = item.customizations || {};
+          let toppingTotal = 0;
+          for (const t of (customizations.added_toppings || [])) toppingTotal += Number(t.price || 1.50);
+          if (customizations.extra_cheese) toppingTotal += 2.00;
+
+          validItems.push({
+            menu_item_id: item.menu_item_id, name: item.name, size: item.size,
+            quantity: item.quantity, unit_price: unitPrice + toppingTotal,
+            total_price: (unitPrice + toppingTotal) * item.quantity,
+            customizations: item.customizations, special_requests: item.special_requests,
+          });
+        } else {
+          validItems.push({
+            name: item.name, size: item.size, quantity: item.quantity,
+            unit_price: Number(item.unit_price), total_price: Number(item.total_price),
+            customizations: item.customizations, special_requests: item.special_requests,
+          });
+        }
+      }
+
+      // Apply add modifications
+      const mods = modifications || {};
+      if (mods.add_items && Array.isArray(mods.add_items)) {
+        for (const addItem of mods.add_items) {
+          if (addItem.menu_item_id) {
+            const { rows: [mi] } = await fastify.pg.query(
+              'SELECT name, base_price, sizes, is_available FROM menu_items WHERE id = $1', [addItem.menu_item_id]
+            );
+            if (mi && mi.is_available) {
+              let price = Number(mi.base_price);
+              if (addItem.size && mi.sizes) {
+                const sizeMatch = mi.sizes.find(s => s.name === addItem.size);
+                if (sizeMatch) price = Number(sizeMatch.price);
+              }
+              validItems.push({
+                menu_item_id: addItem.menu_item_id, name: addItem.name || mi.name,
+                size: addItem.size || null, quantity: addItem.quantity || 1,
+                unit_price: price, total_price: price * (addItem.quantity || 1),
+                customizations: addItem.customizations || {}, special_requests: addItem.special_requests || null,
+              });
+            }
+          }
+        }
+      }
+
+      if (validItems.length === 0) {
+        return { error: 'None of the original items are available', warnings };
+      }
+
+      const subtotal = validItems.reduce((sum, i) => sum + Number(i.total_price || i.unit_price * i.quantity), 0);
+      const orderType = mods.change_order_type || originalOrder.order_type || 'pickup';
+      const deliveryAddress = mods.change_delivery_address || originalOrder.delivery_address;
+
+      let deliveryFee = 0;
+      if (orderType === 'delivery') {
+        const { rows: [loc] } = await fastify.pg.query('SELECT delivery_fee FROM locations WHERE id = $1', [targetLocationId]);
+        deliveryFee = Number(loc?.delivery_fee || 0);
+      }
+
+      const tax = Math.round(subtotal * 0.13 * 100) / 100;
+      const total = Math.round((subtotal + tax + deliveryFee) * 100) / 100;
+      const orderNumber = `SL-${Math.floor(100000 + Math.random() * 900000)}`;
+
+      const { rows: [order] } = await fastify.pg.query(
+        `INSERT INTO orders (order_number, location_id, customer_id, customer_name, customer_phone,
+          delivery_address, delivery_instructions, order_type, status, subtotal, tax, discount, total, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmed', $9, $10, 0, $11, $12) RETURNING *`,
+        [orderNumber, targetLocationId, customer.id, customer.name, customer.phone,
+         deliveryAddress, originalOrder.delivery_instructions, orderType,
+         subtotal, tax, total,
+         `Reorder of ${originalOrder.order_number}${warnings.length ? '. Warnings: ' + warnings.join('; ') : ''}`]
+      );
+
+      for (const item of validItems) {
+        await fastify.pg.query(
+          `INSERT INTO order_items (order_id, menu_item_id, name, size, quantity, unit_price, total_price, customizations, special_requests)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [order.id, item.menu_item_id || null, item.name, item.size || null,
+           item.quantity, item.unit_price, item.total_price || item.unit_price * item.quantity,
+           JSON.stringify(item.customizations || {}), item.special_requests || null]
+        );
+      }
+
+      await fastify.pg.query('UPDATE customers SET total_orders = total_orders + 1, updated_at = NOW() WHERE id = $1', [customer.id]);
+
+      // Update customer favorites
+      for (const item of validItems) {
+        if (!item.menu_item_id) continue;
+        await fastify.pg.query(
+          `INSERT INTO customer_favorites (customer_id, location_id, menu_item_id, order_count, usual_size, usual_customizations)
+           VALUES ($1, $2, $3, 1, $4, $5)
+           ON CONFLICT (customer_id, location_id, menu_item_id, usual_size) DO UPDATE
+           SET order_count = customer_favorites.order_count + 1, last_ordered_at = NOW()`,
+          [customer.id, targetLocationId, item.menu_item_id, item.size || null, JSON.stringify(item.customizations || {})]
+        );
+      }
+
+      const estimatedTime = orderType === 'delivery' ? '35-45 minutes' : '20-25 minutes';
+      const itemSummary = validItems.map(i => `${i.quantity}x ${i.size ? i.size + ' ' : ''}${i.name}`).join(', ');
+
+      return {
+        order_id: order.id, order_number: order.order_number, status: order.status,
+        subtotal: Number(order.subtotal), tax: Number(order.tax), total: Number(order.total),
+        delivery_fee: deliveryFee, reordered_from: originalOrder.order_number,
+        warnings: warnings.length ? warnings : undefined,
+        items: validItems, item_summary: itemSummary,
+        estimated_time: estimatedTime,
+        message: `Reorder confirmed! Your new order is ${order.order_number}. ${itemSummary}. Total: $${Number(order.total).toFixed(2)}.${warnings.length ? ' Note: ' + warnings.join('. ') : ''} Estimated ${orderType === 'delivery' ? 'delivery' : 'pickup'}: ${estimatedTime}.`,
+      };
+    }
+
+    case 'get_reorder_suggestions': {
+      const { customer_id, location_id } = parameters;
+      if (!customer_id) return { error: 'customer_id is required' };
+
+      const { rows: [customer] } = await fastify.pg.query(
+        'SELECT id, name, phone FROM customers WHERE id = $1', [customer_id]
+      );
+      if (!customer) return { error: 'Customer not found' };
+
+      const targetLoc = location_id;
+      const conditions = ['o.customer_id = $1', "o.status IN ('completed', 'confirmed')"];
+      const params = [customer_id];
+      let idx = 2;
+
+      if (targetLoc) {
+        conditions.push(`o.location_id = $${idx++}`);
+        params.push(targetLoc);
+      }
+      params.push(10);
+
+      const { rows: orders } = await fastify.pg.query(
+        `SELECT o.id, o.order_number, o.location_id, o.order_type, o.total, o.delivery_address, o.created_at, l.name AS location_name
+         FROM orders o JOIN locations l ON l.id = o.location_id
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY o.created_at DESC LIMIT $${idx}`,
+        params
+      );
+
+      const suggestions = [];
+      for (const order of orders) {
+        const { rows: items } = await fastify.pg.query(
+          'SELECT menu_item_id, name, size, quantity, unit_price, total_price, customizations, special_requests FROM order_items WHERE order_id = $1',
+          [order.id]
+        );
+
+        const unavailable = [];
+        for (const item of items) {
+          if (item.menu_item_id) {
+            const { rows: [mi] } = await fastify.pg.query('SELECT is_available FROM menu_items WHERE id = $1', [item.menu_item_id]);
+            if (mi && !mi.is_available) unavailable.push(item.name);
+            if (targetLoc) {
+              const { rows: oos } = await fastify.pg.query(
+                `SELECT t.name FROM menu_item_toppings mit JOIN toppings t ON t.id = mit.topping_id
+                 LEFT JOIN location_stock ls ON ls.item_id = t.id AND ls.item_type = 'topping' AND ls.location_id = $1
+                 WHERE mit.menu_item_id = $2 AND mit.is_required = true AND ls.stock_status = 'out_of_stock'`,
+                [targetLoc, item.menu_item_id]
+              );
+              for (const t of oos) unavailable.push(`${item.name} (missing ${t.name})`);
+            }
+          }
+        }
+
+        suggestions.push({
+          order_id: order.id, order_number: order.order_number,
+          location_name: order.location_name, order_type: order.order_type,
+          total: Number(order.total), delivery_address: order.delivery_address,
+          created_at: order.created_at,
+          items: items.map(i => ({
+            menu_item_id: i.menu_item_id, name: i.name, size: i.size,
+            quantity: i.quantity, unit_price: Number(i.unit_price),
+            total_price: Number(i.total_price), customizations: i.customizations,
+            special_requests: i.special_requests,
+          })),
+          item_summary: items.map(i => `${i.quantity}x ${i.size ? i.size + ' ' : ''}${i.name}`).join(', '),
+          available: unavailable.length === 0, unavailable_items: unavailable.length ? unavailable : undefined,
+          can_reorder: unavailable.length === 0,
+        });
+      }
+
+      // Deduplicate by item composition
+      const seen = new Set();
+      const unique = suggestions.filter(s => {
+        const key = s.items.map(i => `${i.menu_item_id || i.name}:${i.size}:${i.quantity}`).sort().join('|');
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+
+      return { customer: { id: customer.id, name: customer.name }, suggestions: unique.slice(0, 5) };
+    }
+
     default:
       return { error: `Unknown tool: ${tool_name}` };
   }

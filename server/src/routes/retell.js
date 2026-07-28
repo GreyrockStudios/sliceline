@@ -126,6 +126,65 @@ const RETELL_TOOLS = [
     },
   },
   {
+    name: 'get_customer_orders',
+    description: 'Get a customer\'s full order history with items. Use after lookup_customer to show past orders for reorder.',
+    parameters: {
+      type: 'object',
+      properties: {
+        customer_id: { type: 'string', description: 'The customer ID (from lookup_customer)' },
+        location_id: { type: 'string', description: 'Filter orders by location (optional)' },
+        limit: { type: 'integer', description: 'Number of orders to return (default 5)' },
+      },
+      required: ['customer_id'],
+    },
+  },
+  {
+    name: 'reorder',
+    description: 'Reorder a customer\'s previous order. Creates a new order with the same items, validates availability, and recalculates pricing. Can add/remove items via modifications.',
+    parameters: {
+      type: 'object',
+      properties: {
+        customer_id: { type: 'string', description: 'The customer ID' },
+        order_id: { type: 'string', description: 'The order ID to reorder from (from get_customer_orders)' },
+        location_id: { type: 'string', description: 'Override location (optional, defaults to original order location)' },
+        modifications: {
+          type: 'object',
+          description: 'Optional modifications to the reorder',
+          properties: {
+            add_items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  menu_item_id: { type: 'string' },
+                  name: { type: 'string' },
+                  size: { type: 'string' },
+                  quantity: { type: 'integer' },
+                  customizations: { type: 'object' },
+                },
+              },
+            },
+            change_order_type: { type: 'string', enum: ['pickup', 'delivery'] },
+            change_delivery_address: { type: 'string' },
+          },
+        },
+      },
+      required: ['customer_id', 'order_id'],
+    },
+  },
+  {
+    name: 'get_reorder_suggestions',
+    description: 'Get reorder suggestions for a customer — their most common past orders with availability status. Shows the top 5 unique past orders with whether they can be reordered.',
+    parameters: {
+      type: 'object',
+      properties: {
+        customer_id: { type: 'string', description: 'The customer ID' },
+        location_id: { type: 'string', description: 'Filter by location (optional)' },
+      },
+      required: ['customer_id'],
+    },
+  },
+  {
     name: 'get_order_status',
     description: 'Check the status of an existing order by order number.',
     parameters: {
@@ -145,7 +204,8 @@ const RETELL_TOOLS = [
 const RETELL_AGENT_PROMPT = `You are SliceLine, the friendly AI ordering assistant for Demo Pizza. You take pizza orders over the phone with a warm, efficient, and helpful personality.
 
 ## Your Role
-- Take food orders accurately and efficiently
+- Take food orders accurately and efficiently over the phone
+- Recognize returning customers and offer quick reorders
 - Help customers with the menu, specials, and recommendations
 - Confirm every order before placing it
 - Route orders to the correct store location
@@ -172,14 +232,29 @@ const RETELL_AGENT_PROMPT = `You are SliceLine, the friendly AI ordering assista
 
 ## Call Flow
 1. Greet the customer warmly — use the location's phone greeting if available
-2. Ask if they've ordered before (look up by phone if yes)
-3. Determine their location (nearest store) — check if they're open and can deliver
-4. Take their order, checking for specials and stock
-5. Calculate topping additions/removals and confirm the total
-6. If any topping is out of stock, proactively explain which pizzas are affected and suggest alternatives
-7. Read back the full order with prices for confirmation
-8. Place the order and give them the order number and estimated time
-9. Thank them and say goodbye
+2. Ask for their phone number to look them up
+3. If they're a returning customer:
+   - Welcome them back by name
+   - Use get_reorder_suggestions to show their past orders
+   - Offer: "Want the usual?" or "I see you ordered X last time — same thing today?"
+   - If they say yes, use the reorder tool with their previous order_id
+4. If new or they want something different, determine their location (nearest store)
+5. Take their order, checking for specials and stock
+6. Calculate topping additions/removals and confirm the total
+7. If any item from a reorder is unavailable, tell them what changed and offer alternatives
+8. Read back the full order with prices for confirmation
+9. Place the order and give them the order number and estimated time
+10. Thank them and say goodbye
+
+## Reorder Flow (IMPORTANT)
+When a returning customer calls:
+1. Use lookup_customer with their phone number
+2. If found, use get_reorder_suggestions with their customer_id
+3. Present their past orders naturally: "I see your last order was a Large Works and garlic knots — want the same thing today?"
+4. If they say yes, use reorder with the order_id
+5. If they want modifications ("same thing but no olives"), use reorder with modifications to add/remove items
+6. If any items are unavailable, the reorder tool will flag them — inform the customer and offer alternatives
+7. If they want something completely different, take a fresh order with place_order
 
 ## Pricing Rules
 - Base pizza price is for the pizza with its default toppings
@@ -196,7 +271,8 @@ const RETELL_AGENT_PROMPT = `You are SliceLine, the friendly AI ordering assista
 - **Delivery outside zone**: "I'm sorry, we can't deliver to your address, but you can place an order for pickup!"
 - **Dietary restrictions**: Offer gluten-free or vegetarian options from the menu.
 - **Large orders**: Suggest the Family Combo or Wing Night deal.
-- **Returning customers**: Welcome them back, reference their usual order if possible.
+- **Returning customers**: ALWAYS look them up and offer reorder. People love ordering the same thing. "Want your usual?" is the fastest path to a happy customer.
+- **Item unavailable on reorder**: "Your usual has pepperoni on it, but we're out of pepperoni tonight. I can do the Works without pepperoni, or how about a Veggie Supreme instead?"
 - **Unclear requests**: Ask clarifying questions rather than guessing.
 
 ## Tone
@@ -619,6 +695,272 @@ module.exports = async function (fastify, opts) {
           } else {
             result = { customer: null, message: 'New customer — no previous orders found.' };
           }
+          break;
+        }
+
+        case 'get_customer_orders': {
+          const { customer_id, limit = 5, location_id } = parameters;
+          if (!customer_id) { result = { error: 'customer_id is required' }; break; }
+
+          const { rows: [cust] } = await fastify.pg.query(
+            'SELECT id, name, phone FROM customers WHERE id = $1', [customer_id]
+          );
+          if (!cust) { result = { error: 'Customer not found' }; break; }
+
+          const conditions = ['o.customer_id = $1', "o.status IN ('completed', 'confirmed')"];
+          const params = [customer_id];
+          let idx = 2;
+          if (location_id) {
+            conditions.push(`o.location_id = $${idx++}`);
+            params.push(location_id);
+          }
+          params.push(limit);
+
+          const { rows: custOrders } = await fastify.pg.query(
+            `SELECT o.id, o.order_number, o.location_id, o.order_type, o.total,
+                    o.delivery_address, o.status, o.created_at, l.name AS location_name
+             FROM orders o JOIN locations l ON l.id = o.location_id
+             WHERE ${conditions.join(' AND ')}
+             ORDER BY o.created_at DESC LIMIT $${idx}`,
+            params
+          );
+
+          for (const order of custOrders) {
+            const { rows: items } = await fastify.pg.query(
+              'SELECT menu_item_id, name, size, quantity, unit_price, total_price, customizations, special_requests FROM order_items WHERE order_id = $1',
+              [order.id]
+            );
+            order.items = items;
+            order.item_summary = items.map(i => `${i.quantity}x ${i.size ? i.size + ' ' : ''}${i.name}`).join(', ');
+          }
+
+          result = { customer: { id: cust.id, name: cust.name, phone: cust.phone }, orders: custOrders };
+          break;
+        }
+
+        case 'reorder': {
+          const { customer_id, order_id, location_id, modifications } = parameters;
+          if (!customer_id) { result = { error: 'customer_id is required' }; break; }
+          if (!order_id) { result = { error: 'order_id is required' }; break; }
+
+          const { rows: [cust] } = await fastify.pg.query(
+            'SELECT id, phone, name, default_location_id FROM customers WHERE id = $1', [customer_id]
+          );
+          if (!cust) { result = { error: 'Customer not found' }; break; }
+
+          const { rows: [origOrder] } = await fastify.pg.query(
+            'SELECT o.*, l.name AS location_name FROM orders o JOIN locations l ON l.id = o.location_id WHERE o.id = $1 AND o.customer_id = $2',
+            [order_id, customer_id]
+          );
+          if (!origOrder) { result = { error: 'Original order not found' }; break; }
+
+          const { rows: origItems } = await fastify.pg.query(
+            'SELECT * FROM order_items WHERE order_id = $1 ORDER BY created_at', [origOrder.id]
+          );
+
+          const targetLoc = location_id || origOrder.location_id;
+          const warnings = [];
+          const validItems = [];
+
+          for (const item of origItems) {
+            if (item.menu_item_id) {
+              const { rows: [mi] } = await fastify.pg.query('SELECT is_available, name, base_price, sizes FROM menu_items WHERE id = $1', [item.menu_item_id]);
+              if (!mi || !mi.is_available) { warnings.push(`${item.name} is no longer available`); continue; }
+
+              const { rows: oos } = await fastify.pg.query(
+                `SELECT t.name FROM menu_item_toppings mit JOIN toppings t ON t.id = mit.topping_id
+                 LEFT JOIN location_stock ls ON ls.item_id = t.id AND ls.item_type = 'topping' AND ls.location_id = $1
+                 WHERE mit.menu_item_id = $2 AND mit.is_required = true AND ls.stock_status = 'out_of_stock'`,
+                [targetLoc, item.menu_item_id]
+              );
+              if (oos.length > 0) { warnings.push(`${item.name} is unavailable (out of stock: ${oos.map(t => t.name).join(', ')})`); continue; }
+
+              let unitPrice = Number(item.unit_price);
+              const { rows: [ovr] } = await fastify.pg.query(
+                'SELECT price_override, sizes_override FROM location_menu_overrides WHERE location_id = $1 AND menu_item_id = $2',
+                [targetLoc, item.menu_item_id]
+              );
+              if (item.size && mi.sizes) {
+                const sizes = ovr?.sizes_override || mi.sizes;
+                const sz = sizes.find(s => s.name === item.size);
+                if (sz) unitPrice = Number(sz.price);
+              }
+
+              const custz = item.customizations || {};
+              let topTotal = 0;
+              for (const t of (custz.added_toppings || [])) topTotal += Number(t.price || 1.50);
+              if (custz.extra_cheese) topTotal += 2.00;
+
+              validItems.push({
+                menu_item_id: item.menu_item_id, name: item.name, size: item.size,
+                quantity: item.quantity, unit_price: unitPrice + topTotal,
+                total_price: (unitPrice + topTotal) * item.quantity,
+                customizations: item.customizations, special_requests: item.special_requests,
+              });
+            } else {
+              validItems.push({
+                name: item.name, size: item.size, quantity: item.quantity,
+                unit_price: Number(item.unit_price), total_price: Number(item.total_price),
+                customizations: item.customizations, special_requests: item.special_requests,
+              });
+            }
+          }
+
+          const mods = modifications || {};
+          if (mods.add_items && Array.isArray(mods.add_items)) {
+            for (const addIt of mods.add_items) {
+              if (addIt.menu_item_id) {
+                const { rows: [mi] } = await fastify.pg.query('SELECT name, base_price, sizes, is_available FROM menu_items WHERE id = $1', [addIt.menu_item_id]);
+                if (mi && mi.is_available) {
+                  let p = Number(mi.base_price);
+                  if (addIt.size && mi.sizes) { const sz = mi.sizes.find(s => s.name === addIt.size); if (sz) p = Number(sz.price); }
+                  validItems.push({
+                    menu_item_id: addIt.menu_item_id, name: addIt.name || mi.name,
+                    size: addIt.size || null, quantity: addIt.quantity || 1,
+                    unit_price: p, total_price: p * (addIt.quantity || 1),
+                    customizations: addIt.customizations || {}, special_requests: addIt.special_requests || null,
+                  });
+                }
+              }
+            }
+          }
+
+          if (validItems.length === 0) { result = { error: 'None of the original items are available', warnings }; break; }
+
+          const subtotal = validItems.reduce((s, i) => s + Number(i.total_price || i.unit_price * i.quantity), 0);
+          const orderType = mods.change_order_type || origOrder.order_type || 'pickup';
+          const deliveryAddr = mods.change_delivery_address || origOrder.delivery_address;
+
+          let delFee = 0;
+          if (orderType === 'delivery') {
+            const { rows: [loc] } = await fastify.pg.query('SELECT delivery_fee FROM locations WHERE id = $1', [targetLoc]);
+            delFee = Number(loc?.delivery_fee || 0);
+          }
+
+          const tax = Math.round(subtotal * 0.13 * 100) / 100;
+          const total = Math.round((subtotal + tax + delFee) * 100) / 100;
+          const orderNum = `SL-${Math.floor(100000 + Math.random() * 900000)}`;
+
+          const { rows: [newOrder] } = await fastify.pg.query(
+            `INSERT INTO orders (order_number, location_id, customer_id, customer_name, customer_phone,
+              delivery_address, delivery_instructions, order_type, status, subtotal, tax, discount, total, notes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmed', $9, $10, 0, $11, $12) RETURNING *`,
+            [orderNum, targetLoc, cust.id, cust.name, cust.phone,
+             deliveryAddr, origOrder.delivery_instructions, orderType,
+             subtotal, tax, total,
+             `Reorder of ${origOrder.order_number}${warnings.length ? '. Warnings: ' + warnings.join('; ') : ''}`]
+          );
+
+          for (const vi of validItems) {
+            await fastify.pg.query(
+              `INSERT INTO order_items (order_id, menu_item_id, name, size, quantity, unit_price, total_price, customizations, special_requests)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              [newOrder.id, vi.menu_item_id || null, vi.name, vi.size || null,
+               vi.quantity, vi.unit_price, vi.total_price || vi.unit_price * vi.quantity,
+               JSON.stringify(vi.customizations || {}), vi.special_requests || null]
+            );
+          }
+
+          await fastify.pg.query('UPDATE customers SET total_orders = total_orders + 1, updated_at = NOW() WHERE id = $1', [cust.id]);
+
+          for (const vi of validItems) {
+            if (!vi.menu_item_id) continue;
+            await fastify.pg.query(
+              `INSERT INTO customer_favorites (customer_id, location_id, menu_item_id, order_count, usual_size, usual_customizations)
+               VALUES ($1, $2, $3, 1, $4, $5)
+               ON CONFLICT (customer_id, location_id, menu_item_id, usual_size) DO UPDATE
+               SET order_count = customer_favorites.order_count + 1, last_ordered_at = NOW()`,
+              [cust.id, targetLoc, vi.menu_item_id, vi.size || null, JSON.stringify(vi.customizations || {})]
+            );
+          }
+
+          const estTime = orderType === 'delivery' ? '35-45 minutes' : '20-25 minutes';
+          const itemSum = validItems.map(i => `${i.quantity}x ${i.size ? i.size + ' ' : ''}${i.name}`).join(', ');
+
+          result = {
+            order_id: newOrder.id, order_number: newOrder.order_number, status: newOrder.status,
+            subtotal: Number(newOrder.subtotal), tax: Number(newOrder.tax), total: Number(newOrder.total),
+            delivery_fee: delFee, reordered_from: origOrder.order_number,
+            warnings: warnings.length ? warnings : undefined,
+            items: validItems, item_summary: itemSum,
+            estimated_time: estTime,
+            message: `Reorder confirmed! Your new order is ${newOrder.order_number}. ${itemSum}. Total: $${Number(newOrder.total).toFixed(2)}.${warnings.length ? ' Note: ' + warnings.join('. ') : ''} Estimated ${orderType === 'delivery' ? 'delivery' : 'pickup'}: ${estTime}.`,
+          };
+          break;
+        }
+
+        case 'get_reorder_suggestions': {
+          const { customer_id, location_id } = parameters;
+          if (!customer_id) { result = { error: 'customer_id is required' }; break; }
+
+          const { rows: [cust] } = await fastify.pg.query(
+            'SELECT id, name, phone FROM customers WHERE id = $1', [customer_id]
+          );
+          if (!cust) { result = { error: 'Customer not found' }; break; }
+
+          const cond = ['o.customer_id = $1', "o.status IN ('completed', 'confirmed')"];
+          const prms = [customer_id];
+          let pidx = 2;
+          if (location_id) { cond.push(`o.location_id = $${pidx++}`); prms.push(location_id); }
+          prms.push(10);
+
+          const { rows: suggOrders } = await fastify.pg.query(
+            `SELECT o.id, o.order_number, o.location_id, o.order_type, o.total, o.delivery_address, o.created_at, l.name AS location_name
+             FROM orders o JOIN locations l ON l.id = o.location_id
+             WHERE ${cond.join(' AND ')}
+             ORDER BY o.created_at DESC LIMIT $${pidx}`,
+            prms
+          );
+
+          const suggestions = [];
+          for (const order of suggOrders) {
+            const { rows: sItems } = await fastify.pg.query(
+              'SELECT menu_item_id, name, size, quantity, unit_price, total_price, customizations, special_requests FROM order_items WHERE order_id = $1',
+              [order.id]
+            );
+
+            const unavail = [];
+            for (const item of sItems) {
+              if (item.menu_item_id) {
+                const { rows: [mi] } = await fastify.pg.query('SELECT is_available FROM menu_items WHERE id = $1', [item.menu_item_id]);
+                if (mi && !mi.is_available) unavail.push(item.name);
+                if (location_id) {
+                  const { rows: oos } = await fastify.pg.query(
+                    `SELECT t.name FROM menu_item_toppings mit JOIN toppings t ON t.id = mit.topping_id
+                     LEFT JOIN location_stock ls ON ls.item_id = t.id AND ls.item_type = 'topping' AND ls.location_id = $1
+                     WHERE mit.menu_item_id = $2 AND mit.is_required = true AND ls.stock_status = 'out_of_stock'`,
+                    [location_id, item.menu_item_id]
+                  );
+                  for (const t of oos) unavail.push(`${item.name} (missing ${t.name})`);
+                }
+              }
+            }
+
+            suggestions.push({
+              order_id: order.id, order_number: order.order_number,
+              location_name: order.location_name, order_type: order.order_type,
+              total: Number(order.total), delivery_address: order.delivery_address,
+              created_at: order.created_at,
+              items: sItems.map(i => ({
+                menu_item_id: i.menu_item_id, name: i.name, size: i.size,
+                quantity: i.quantity, unit_price: Number(i.unit_price),
+                total_price: Number(i.total_price), customizations: i.customizations,
+                special_requests: i.special_requests,
+              })),
+              item_summary: sItems.map(i => `${i.quantity}x ${i.size ? i.size + ' ' : ''}${i.name}`).join(', '),
+              available: unavail.length === 0, unavailable_items: unavail.length ? unavail : undefined,
+              can_reorder: unavail.length === 0,
+            });
+          }
+
+          const seen = new Set();
+          const unique = suggestions.filter(s => {
+            const key = s.items.map(i => `${i.menu_item_id || i.name}:${i.size}:${i.quantity}`).sort().join('|');
+            if (seen.has(key)) return false;
+            seen.add(key); return true;
+          });
+
+          result = { customer: { id: cust.id, name: cust.name }, suggestions: unique.slice(0, 5) };
           break;
         }
 

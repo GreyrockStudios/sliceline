@@ -14,6 +14,7 @@ const vapiRoutes = require('./routes/vapi');
 const posRoutes = require('./routes/pos');
 const adminRoutes = require('./routes/admin');
 const customerRoutes = require('./routes/customers');
+const customerOrderRoutes = require('./routes/customerOrders');
 const { getAdapter, listAdapters } = require('./pos');
 const { setupLLMWebSocket } = require('./llm-websocket');
 
@@ -46,6 +47,7 @@ async function start() {
   fastify.register(posRoutes, { prefix: '/api/pos' });
   fastify.register(adminRoutes, { prefix: '/api/admin' });
   fastify.register(customerRoutes, { prefix: '/api/customers' });
+  fastify.register(customerOrderRoutes, { prefix: '/api/customers' });
 
   // Health check (public — no auth required)
   fastify.get('/health', async () => ({ status: 'ok', service: 'sliceline' }));
